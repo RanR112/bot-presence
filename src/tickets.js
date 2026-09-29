@@ -41,6 +41,8 @@ export function buildPanel() {
         '4. Tunggu moderator memverifikasi.',
         '',
         'Setelah disetujui, role akan diberikan otomatis sesuai total coin kamu, dan terus diperbarui saat kamu kirim gift lagi.',
+        '',
+        '**Punya riwayat gift dari sebelum bot ini aktif?** Di channel tiket yang sama, kamu juga bisa sekalian klaim coin histori — kirim screenshot **Riwayat Koin** TikTok (filter "Hadiah dikirim") sebagai bukti tambahan, moderator akan menambahkannya ke total kamu.',
       ].join('\n'),
     );
 
@@ -224,6 +226,8 @@ export class TicketManager {
           '',
           '**Langkah terakhir:** kirim **screenshot bukti** kepemilikan akun TikTok tersebut di channel ini (misalnya tangkapan layar profil kamu saat sedang login).',
           '',
+          '**Punya riwayat gift dari sebelum bot ini aktif dan mau diklaim juga?** Sekalian kirim screenshot **Riwayat Koin** TikTok kamu di sini juga (Profil → Saldo → ikon riwayat → filter "Hadiah dikirim"), lalu sebutkan total coin-nya. Moderator akan menambahkannya manual ke total kamu.',
+          '',
           'Setelah screenshot terkirim, moderator akan otomatis diberi tahu.',
         ].join('\n'),
       );
@@ -283,6 +287,9 @@ export class TicketManager {
         { name: 'Tiket', value: `<#${channelId}>`, inline: true },
       )
       .setImage(ticket.screenshotUrl)
+      .setFooter({
+        text: 'Cek juga channel tiket -- kalau ada screenshot Riwayat Koin tambahan, pakai >addcoin setelah menyetujui.',
+      })
       .setTimestamp(new Date());
 
     const row = new ActionRowBuilder().addComponents(
@@ -344,7 +351,6 @@ export class TicketManager {
       });
       const totals = this.#store.totalsForLink(this.#store.linkForDiscordId(ticket.discordId));
       const granted = await this.#roles.syncMilestones(ticket.discordId, totals.allTime);
-      await this.#roles.syncTopRoles();
       grantedText =
         granted.length > 0
           ? `\nRole yang kamu dapat: ${granted.map((m) => `**${m.name}**`).join(', ')}`

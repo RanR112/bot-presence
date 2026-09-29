@@ -181,3 +181,87 @@ describe('GiftStore', () => {
     assert.deepEqual(store.linkForDiscordId('discord-2').milestonesGranted, [50, 100, 250]);
   });
 });
+
+describe('GiftStore -- addManualCoins (klaim histori coin)', () => {
+  let dir;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bp-manual-'));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('menambah (bukan mengganti) all-time member yang sudah punya tiktokUserId', async () => {
+    const store = await new GiftStore(join(dir, 'a.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-1', { displayId: 'sudahgift', realName: 'A' });
+    store.recordGift({ userId: '111', displayId: 'sudahgift', coins: 100 });
+
+    const total1 = store.addManualCoins('discord-1', 50);
+    assert.equal(total1, 150, 'ditambahkan ke total yang sudah ada, bukan menimpa');
+
+    const total2 = store.addManualCoins('discord-1', 25);
+    assert.equal(total2, 175, 'pemanggilan kedua tetap menambah, tidak menimpa');
+  });
+
+  it('klaim histori TIDAK masuk ke bucket hari/bulan/tahun, cuma all-time', async () => {
+    const store = await new GiftStore(join(dir, 'b.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-2', { displayId: 'histori', realName: 'B' });
+    store.recordGift({ userId: '222', displayId: 'histori', coins: 10 });
+
+    store.addManualCoins('discord-2', 500);
+
+    const totals = store.totalsForLink(store.linkForDiscordId('discord-2'));
+    assert.equal(totals.allTime, 510);
+    assert.equal(totals.day, 10, 'klaim histori tidak ikut menambah "hari ini"');
+    assert.equal(totals.month, 10);
+    assert.equal(totals.year, 10);
+  });
+
+  it('balik null kalau Discord ID belum terverifikasi (belum ada link)', async () => {
+    const store = await new GiftStore(join(dir, 'c.json'), 'Asia/Jakarta').load();
+    assert.equal(store.addManualCoins('belum-verifikasi', 100), null);
+  });
+
+  it('member yang BELUM PERNAH gift real-time (tiktokUserId belum diketahui) tetap bisa dikredit', async () => {
+    const store = await new GiftStore(join(dir, 'd.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-3', { displayId: 'baruverif', realName: 'C' });
+
+    const total = store.addManualCoins('discord-3', 300);
+    assert.equal(total, 300);
+    assert.equal(
+      store.totalsForLink(store.linkForDiscordId('discord-3')).allTime,
+      300,
+      'totalsForLink harus tetap menemukan kredit manual walau tiktokUserId masih null',
+    );
+  });
+
+  it('kredit manual OTOMATIS TERGABUNG begitu gift real-time pertama datang dengan userId asli', async () => {
+    const store = await new GiftStore(join(dir, 'e.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-4', { displayId: 'nantigift', realName: 'D' });
+    store.addManualCoins('discord-4', 200);
+
+    // Gift real-time pertama datang -- userId '444' baru pertama kali terlihat.
+    store.recordGift({ userId: '444', displayId: 'nantigift', coins: 30 });
+
+    const link = store.linkForDiscordId('discord-4');
+    assert.equal(link.tiktokUserId, '444', 'tiktokUserId ikut ter-backfill seperti biasa');
+
+    const totals = store.totalsForLink(link);
+    assert.equal(totals.allTime, 230, '200 manual + 30 real-time harus tergabung jadi satu total');
+    assert.equal(
+      store.ranking('allTime', 10).length,
+      1,
+      'tidak boleh ada dua entri terpisah di ranking untuk member yang sama',
+    );
+  });
+
+  it('penambahan jumlah invalid (0/negatif/NaN) diabaikan', async () => {
+    const store = await new GiftStore(join(dir, 'f.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-5', { displayId: 'x', realName: 'X' });
+    assert.equal(store.addManualCoins('discord-5', 0), null);
+    assert.equal(store.addManualCoins('discord-5', -10), null);
+    assert.equal(store.addManualCoins('discord-5', NaN), null);
+  });
+});

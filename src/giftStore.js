@@ -5,7 +5,6 @@ const DEFAULTS = {
   users: {},
   links: {},
   roleIds: {},
-  topHolders: {},
   meta: {},
 };
 
@@ -23,6 +22,19 @@ function addToBucket(bucket, currentKey, coins) {
   bucket.total += coins;
 }
 
+const emptyUser = () => ({
+  displayId: null,
+  nickname: null,
+  allTime: 0,
+  day: emptyBucket(),
+  month: emptyBucket(),
+  year: emptyBucket(),
+  lastSeenAt: null,
+});
+
+/** Kunci sementara buat kredit manual sebelum userId numerik TikTok diketahui. */
+const manualKey = (displayId) => `manual:${displayId.toLowerCase()}`;
+
 export class GiftStore {
   #store;
   #timeZone;
@@ -38,7 +50,6 @@ export class GiftStore {
     data.users ??= {};
     data.links ??= {};
     data.roleIds ??= {};
-    data.topHolders ??= {};
     data.meta ??= {};
     return this;
   }
@@ -57,15 +68,21 @@ export class GiftStore {
     const data = this.#store.get();
     const keys = this.#keys();
 
-    const user = (data.users[userId] ??= {
-      displayId: null,
-      nickname: null,
-      allTime: 0,
-      day: emptyBucket(),
-      month: emptyBucket(),
-      year: emptyBucket(),
-      lastSeenAt: null,
-    });
+    // Gabungkan kredit manual (klaim histori lewat `>addcoin`, dicatat sebelum
+    // userId numerik TikTok diketahui) begitu userId aslinya pertama kali
+    // terlihat lewat event gift sungguhan -- supaya totalnya tidak kepecah
+    // jadi dua entri terpisah selamanya.
+    if (displayId) {
+      const pendingKey = manualKey(displayId);
+      const pending = data.users[pendingKey];
+      if (pending && pendingKey !== userId) {
+        const target = (data.users[userId] ??= emptyUser());
+        target.allTime += pending.allTime;
+        delete data.users[pendingKey];
+      }
+    }
+
+    const user = (data.users[userId] ??= emptyUser());
 
     if (displayId) user.displayId = displayId;
     if (nickname) user.nickname = nickname;
@@ -174,8 +191,47 @@ export class GiftStore {
 
   totalsForLink(link) {
     if (!link) return { day: 0, month: 0, year: 0, allTime: 0 };
-    const userId = link.tiktokUserId ?? this.#userIdForDisplayId(link.displayId ?? '');
-    return userId ? this.totalsFor(userId) : { day: 0, month: 0, year: 0, allTime: 0 };
+    const userId = this.#resolvedUserIdFor(link);
+    if (userId) return this.totalsFor(userId);
+
+    // Belum ada userId numerik sama sekali -- tapi mungkin ada kredit manual
+    // yang tersimpan di kunci sementara "manual:<displayId>".
+    const pending = this.#store.get().users[manualKey(link.displayId ?? '')];
+    return pending
+      ? { day: 0, month: 0, year: 0, allTime: pending.allTime }
+      : { day: 0, month: 0, year: 0, allTime: 0 };
+  }
+
+  #resolvedUserIdFor(link) {
+    return link.tiktokUserId ?? this.#userIdForDisplayId(link.displayId ?? '');
+  }
+
+  /**
+   * Kredit coin manual (klaim histori gift SEBELUM bot mulai memantau,
+   * direview moderator dari screenshot Riwayat Koin TikTok member). SELALU
+   * menambah (increment), tidak pernah menimpa -- dan cuma menambah all-time,
+   * bukan bucket hari/bulan/tahun, karena klaim histori bukan aktivitas
+   * "hari ini". Dikunci ke userId numerik kalau sudah diketahui, kalau belum
+   * dikunci sementara ke displayId dan otomatis digabung nanti (lihat
+   * `recordGift`) begitu gift real-time pertama dari akun itu terdeteksi.
+   *
+   * @returns {number|null} total all-time setelah ditambah, atau null kalau member belum terverifikasi
+   */
+  addManualCoins(discordId, coins) {
+    if (!Number.isFinite(coins) || coins <= 0) return null;
+
+    const data = this.#store.get();
+    const link = data.links[discordId];
+    if (!link) return null;
+
+    const key = this.#resolvedUserIdFor(link) ?? manualKey(link.displayId);
+    const user = (data.users[key] ??= emptyUser());
+    if (!user.displayId) user.displayId = link.displayId;
+    user.allTime += coins;
+    user.lastSeenAt = new Date().toISOString();
+
+    this.#store.scheduleSave();
+    return user.allTime;
   }
 
   markMilestonesGranted(discordId, coinValues) {
@@ -193,15 +249,6 @@ export class GiftStore {
 
   setRoleId(name, id) {
     this.#store.get().roleIds[name] = id;
-    this.#store.scheduleSave();
-  }
-
-  getTopHolders() {
-    return { ...this.#store.get().topHolders };
-  }
-
-  setTopHolders(holders) {
-    this.#store.get().topHolders = holders;
     this.#store.scheduleSave();
   }
 

@@ -6,7 +6,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { GiftStore } from '../src/giftStore.js';
 import { buildLeaderboardEmbed } from '../src/leaderboard.js';
-import { MILESTONES, TOP_ROLES } from '../src/roles.js';
+import { MILESTONES } from '../src/roles.js';
 import { buildPanel } from '../src/tickets.js';
 
 describe('buildLeaderboardEmbed', () => {
@@ -101,12 +101,12 @@ describe('definisi role', () => {
   });
 
   it('setiap role punya nama unik -- nama dipakai sebagai kunci pencarian role di guild', () => {
-    const names = [...MILESTONES, ...TOP_ROLES].map((role) => role.name);
+    const names = MILESTONES.map((role) => role.name);
     assert.equal(new Set(names).size, names.length);
   });
 
   it('warna berada dalam rentang warna Discord yang sah', () => {
-    for (const role of [...MILESTONES, ...TOP_ROLES]) {
+    for (const role of MILESTONES) {
       assert.ok(role.color >= 0 && role.color <= 0xffffff, `${role.name} warnanya di luar rentang`);
     }
   });

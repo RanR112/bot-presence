@@ -55,6 +55,39 @@ function isModerator(message, config) {
   );
 }
 
+/**
+ * Cari target lewat mention (kalau ada) atau cari-by-username lewat REST API
+ * Discord (tidak butuh intent GuildMembers). Balikan `{ target }` kalau
+ * ketemu tepat satu, atau `{ replyText }` kalau perlu dibalas ke user
+ * (tidak ketemu / ambigu / query kosong).
+ *
+ * Menerima `guild`/`mentions`/`query` secara eksplisit (bukan objek Message
+ * utuh) supaya pemanggil bebas mengubah `query` (mis. addcoin membuang
+ * argumen jumlah dulu) tanpa perlu menyalin objek Message -- properti seperti
+ * `guild` itu getter di kelas Message discord.js, jadi tidak ikut ter-copy
+ * kalau di-spread (`{ ...message }`), dan itu akan crash saat dipakai.
+ */
+async function resolveTarget({ guild, mentions, query, prefix, commandName }) {
+  const mentioned = mentions.users.first();
+  if (mentioned) return { target: mentioned };
+
+  if (!query) {
+    return {
+      replyText: `Format: \`${prefix}${commandName} <username_discord>\` atau \`${prefix}${commandName} @member\``,
+    };
+  }
+
+  const matches = await guild.members.search({ query, limit: 5 }).catch(() => null);
+  if (!matches || matches.size === 0) {
+    return { replyText: `Tidak ada member dengan username mengandung "${query}".` };
+  }
+  if (matches.size > 1) {
+    const list = matches.map((m) => `\`${m.user.username}\` (<@${m.id}>)`).join('\n');
+    return { replyText: `Ditemukan lebih dari satu member, sebutkan lebih spesifik:\n${list}` };
+  }
+  return { target: matches.first().user };
+}
+
 export function createCommandHandler({ store, config, listener, roles }) {
   const prefix = config.commandPrefix;
 
@@ -110,33 +143,24 @@ export function createCommandHandler({ store, config, listener, roles }) {
         return true;
       }
 
-      const query = message.content.slice(prefix.length).trim().split(/\s+/).slice(1).join(' ');
-      const mentioned = message.mentions.users.first();
-
-      let target = mentioned ?? null;
-      if (!target && query) {
-        const matches = await message.guild.members.search({ query, limit: 5 }).catch(() => null);
-
-        if (!matches || matches.size === 0) {
-          await message.reply(`Tidak ada member dengan username mengandung "${query}".`);
-          return true;
-        }
-        if (matches.size > 1) {
-          const list = matches.map((m) => `\`${m.user.username}\` (<@${m.id}>)`).join('\n');
-          await message.reply(
-            `Ditemukan lebih dari satu member, sebutkan lebih spesifik:\n${list}`,
-          );
-          return true;
-        }
-        target = matches.first().user;
-      }
-
-      if (!target) {
-        await message.reply(
-          `Format: \`${prefix}unverify <username_discord>\` atau \`${prefix}unverify @member\``,
-        );
+      const unverifyQuery = message.content
+        .slice(prefix.length)
+        .trim()
+        .split(/\s+/)
+        .slice(1)
+        .join(' ');
+      const resolved = await resolveTarget({
+        guild: message.guild,
+        mentions: message.mentions,
+        query: unverifyQuery,
+        prefix,
+        commandName: 'unverify',
+      });
+      if (!resolved.target) {
+        await message.reply(resolved.replyText);
         return true;
       }
+      const { target } = resolved;
 
       const link = store.linkForDiscordId(target.id);
       if (!link) {
@@ -148,8 +172,81 @@ export function createCommandHandler({ store, config, listener, roles }) {
       store.removeLink(target.id);
 
       await message.reply(
-        `Verifikasi **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}) sudah dicabut, beserta semua role milestone/top gifter yang menempel. Datanya perlu klaim ulang dari awal kalau mau diverifikasi lagi.`,
+        `Verifikasi **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}) sudah dicabut, beserta semua role milestone yang menempel. Datanya perlu klaim ulang dari awal kalau mau diverifikasi lagi.`,
       );
+      return true;
+    }
+
+    if (command === 'addcoin') {
+      if (!isModerator(message, config)) {
+        await message.reply('Perintah ini hanya untuk moderator.');
+        return true;
+      }
+
+      if (
+        config.tickets.modNotifyChannelId &&
+        message.channelId !== config.tickets.modNotifyChannelId
+      ) {
+        await message.reply(
+          `Perintah ini cuma bisa dipakai di <#${config.tickets.modNotifyChannelId}>.`,
+        );
+        return true;
+      }
+
+      const args = message.content.slice(prefix.length).trim().split(/\s+/).slice(1);
+      const amountArg = args.at(-1);
+      const amount = Number.parseInt(amountArg, 10);
+      if (!amountArg || !Number.isFinite(amount) || amount <= 0) {
+        await message.reply(
+          `Format: \`${prefix}addcoin <username_discord|@member> <jumlah_coin>\``,
+        );
+        return true;
+      }
+
+      // args = [<username_atau_mention>, ..., <jumlah>] -- buang elemen
+      // terakhir (jumlah) supaya sisanya jadi query pencarian username.
+      const addcoinQuery = args.slice(0, -1).join(' ');
+      const resolved = await resolveTarget({
+        guild: message.guild,
+        mentions: message.mentions,
+        query: addcoinQuery,
+        prefix,
+        commandName: 'addcoin',
+      });
+      if (!resolved.target) {
+        await message.reply(resolved.replyText);
+        return true;
+      }
+      const { target } = resolved;
+
+      const link = store.linkForDiscordId(target.id);
+      if (!link) {
+        await message.reply(
+          `**${target.username}** (<@${target.id}>) belum terverifikasi. Verifikasi akun dulu sebelum menambah coin histori.`,
+        );
+        return true;
+      }
+
+      const newTotal = store.addManualCoins(target.id, amount);
+      const granted = (await roles?.instance?.syncMilestones(target.id, newTotal)) ?? [];
+
+      let reply = `+${formatCoins(amount)} coin histori ditambahkan untuk **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}). Total all-time sekarang: ${formatCoins(newTotal)}.`;
+      if (granted.length > 0) {
+        reply += `\nRole baru: ${granted.map((m) => `**${m.name}**`).join(', ')}`;
+      }
+      await message.reply(reply);
+
+      if (granted.length > 0 && config.levelUpChannelId) {
+        const channel = await message.guild.channels
+          .fetch(config.levelUpChannelId)
+          .catch(() => null);
+        if (channel?.isTextBased()) {
+          const names = granted.map((m) => `**${m.name}**`).join(', ');
+          await channel
+            .send(`🎉 <@${target.id}> naik tingkat! Role baru: ${names}`)
+            .catch(() => {});
+        }
+      }
       return true;
     }
 
@@ -164,6 +261,7 @@ export function createCommandHandler({ store, config, listener, roles }) {
       if (isModerator(message, config)) {
         lines.push(
           `\`${prefix}unverify <username|@member>\`: (moderator) cabut verifikasi dan semua role member`,
+          `\`${prefix}addcoin <username|@member> <jumlah>\`: (moderator) tambah coin histori member`,
         );
       }
       await message.reply(lines.join('\n'));

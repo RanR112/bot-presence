@@ -171,8 +171,6 @@ async function syncAllRoles() {
       }
     }
   }
-
-  await roles.syncTopRoles();
 }
 
 client.on('messageCreate', async (message) => {

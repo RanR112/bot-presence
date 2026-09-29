@@ -12,12 +12,6 @@ export const MILESTONES = [
   { coins: 10000, name: 'Amethyst Fan', color: 0x9966cc },
 ];
 
-export const TOP_ROLES = [
-  { rank: 1, name: 'Top 1 Gifter', color: 0xffd700 },
-  { rank: 2, name: 'Top 2 Gifter', color: 0xc0c0c0 },
-  { rank: 3, name: 'Top 3 Gifter', color: 0xcd7f32 },
-];
-
 export class RoleManager {
   #guild;
   #store;
@@ -43,7 +37,7 @@ export class RoleManager {
     const created = await this.#guild.roles.create({
       name,
       color,
-      reason: 'Role milestone/top gifter dibuat otomatis oleh bot',
+      reason: 'Role milestone dibuat otomatis oleh bot',
     });
     this.#store.setRoleId(name, created.id);
     logger.info(`Role "${name}" dibuat.`);
@@ -52,7 +46,6 @@ export class RoleManager {
 
   async ensureRoles() {
     for (const milestone of MILESTONES) await this.#resolveRole(milestone);
-    for (const top of TOP_ROLES) await this.#resolveRole(top);
   }
 
   async #fetchMember(discordId) {
@@ -101,97 +94,25 @@ export class RoleManager {
   }
 
   /**
-   * Menyelaraskan role Top 1/2/3. Beda dari milestone: role ini DICABUT dari
-   * pemegang lama begitu peringkatnya tergeser. Pemegang lama dilacak lewat
-   * store, bukan lewat cache member Discord, supaya tidak butuh intent
-   * GuildMembers yang privileged.
-   */
-  async syncTopRoles() {
-    const ranking = this.#store.ranking('allTime', TOP_ROLES.length);
-    const holders = this.#store.getTopHolders();
-    const changes = [];
-
-    for (const top of TOP_ROLES) {
-      const entry = ranking[top.rank - 1] ?? null;
-      const desired = entry ? this.#discordIdForTiktokUser(entry) : null;
-      const current = holders[String(top.rank)] ?? null;
-      if (desired === current) continue;
-
-      const role = await this.#resolveRole(top).catch(() => null);
-      if (!role) continue;
-
-      if (current) {
-        const member = await this.#fetchMember(current);
-        if (member) {
-          await member.roles
-            .remove(role, 'Peringkat top gifter bergeser')
-            .catch((error) => logger.error(`Gagal mencabut ${top.name}: ${error.message}`));
-        }
-      }
-
-      if (desired) {
-        const member = await this.#fetchMember(desired);
-        if (member) {
-          await member.roles
-            .add(role, `Naik ke peringkat ${top.rank} gifter`)
-            .catch((error) => logger.error(`Gagal memberi ${top.name}: ${error.message}`));
-        }
-      }
-
-      holders[String(top.rank)] = desired;
-      changes.push({ rank: top.rank, from: current, to: desired });
-    }
-
-    if (changes.length > 0) this.#store.setTopHolders(holders);
-    return changes;
-  }
-
-  /**
-   * Mencabut SEMUA role (milestone + top gifter) dari member yang verifikasinya
-   * dibatalkan moderator. Beda dari `syncMilestones`/`syncTopRoles`: ini aksi
-   * eksplisit sekali jalan, bukan sinkronisasi berkala -- dipakai saat link-nya
-   * sendiri dianggap salah/curang, jadi role yang sudah didapat lewat link itu
-   * ikut ditarik, bukan dibiarkan menempel.
+   * Mencabut SEMUA role milestone dari member yang verifikasinya dibatalkan
+   * moderator. Beda dari `syncMilestones`: ini aksi eksplisit sekali jalan,
+   * bukan sinkronisasi berkala -- dipakai saat link-nya sendiri dianggap
+   * salah/curang, jadi role yang sudah didapat lewat link itu ikut ditarik,
+   * bukan dibiarkan menempel.
    */
   async revokeAllRoles(discordId) {
     const member = await this.#fetchMember(discordId);
     if (!member) return;
 
-    for (const definition of [...MILESTONES, ...TOP_ROLES]) {
-      const role = await this.#resolveRole(definition).catch(() => null);
+    for (const milestone of MILESTONES) {
+      const role = await this.#resolveRole(milestone).catch(() => null);
       if (role && member.roles.cache.has(role.id)) {
         await member.roles
           .remove(role, 'Verifikasi TikTok dicabut moderator')
           .catch((error) =>
-            logger.error(
-              `Gagal mencabut role ${definition.name} dari ${discordId}: ${error.message}`,
-            ),
+            logger.error(`Gagal mencabut role ${milestone.name} dari ${discordId}: ${error.message}`),
           );
       }
     }
-
-    const holders = this.#store.getTopHolders();
-    let changed = false;
-    for (const rank of Object.keys(holders)) {
-      if (holders[rank] === discordId) {
-        holders[rank] = null;
-        changed = true;
-      }
-    }
-    if (changed) this.#store.setTopHolders(holders);
-  }
-
-  #discordIdForTiktokUser(entry) {
-    for (const [discordId, link] of this.#store.allLinks()) {
-      if (link.tiktokUserId && link.tiktokUserId === entry.userId) return discordId;
-      if (
-        !link.tiktokUserId &&
-        entry.displayId &&
-        link.displayId?.toLowerCase() === entry.displayId.toLowerCase()
-      ) {
-        return discordId;
-      }
-    }
-    return null;
   }
 }
