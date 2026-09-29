@@ -1,0 +1,16 @@
+{
+  "name": "bot-presence",
+  "version": "1.0.0",
+  "description": "Proses kecil yang HANYA menjaga koneksi Gateway Discord tetap hidup, supaya bot terlihat Online. Terpisah total dari logika notifikasi TikTok (yang tetap jalan lewat GitHub Actions + cron-job.org seperti biasa).",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0"
+  }
+}
