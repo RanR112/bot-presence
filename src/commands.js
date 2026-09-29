@@ -98,15 +98,49 @@ export function createCommandHandler({ store, config, listener, roles }) {
         return true;
       }
 
-      const target = message.mentions.users.first();
+      // Dibatasi ke channel moderator supaya hasil cari-member dan info akun
+      // TikTok yang tertaut tidak nyasar ke channel publik.
+      if (
+        config.tickets.modNotifyChannelId &&
+        message.channelId !== config.tickets.modNotifyChannelId
+      ) {
+        await message.reply(
+          `Perintah ini cuma bisa dipakai di <#${config.tickets.modNotifyChannelId}>.`,
+        );
+        return true;
+      }
+
+      const query = message.content.slice(prefix.length).trim().split(/\s+/).slice(1).join(' ');
+      const mentioned = message.mentions.users.first();
+
+      let target = mentioned ?? null;
+      if (!target && query) {
+        const matches = await message.guild.members.search({ query, limit: 5 }).catch(() => null);
+
+        if (!matches || matches.size === 0) {
+          await message.reply(`Tidak ada member dengan username mengandung "${query}".`);
+          return true;
+        }
+        if (matches.size > 1) {
+          const list = matches.map((m) => `\`${m.user.username}\` (<@${m.id}>)`).join('\n');
+          await message.reply(
+            `Ditemukan lebih dari satu member, sebutkan lebih spesifik:\n${list}`,
+          );
+          return true;
+        }
+        target = matches.first().user;
+      }
+
       if (!target) {
-        await message.reply(`Format: \`${prefix}unverify @member\``);
+        await message.reply(
+          `Format: \`${prefix}unverify <username_discord>\` atau \`${prefix}unverify @member\``,
+        );
         return true;
       }
 
       const link = store.linkForDiscordId(target.id);
       if (!link) {
-        await message.reply(`<@${target.id}> belum terverifikasi.`);
+        await message.reply(`**${target.username}** (<@${target.id}>) belum terverifikasi.`);
         return true;
       }
 
@@ -114,7 +148,7 @@ export function createCommandHandler({ store, config, listener, roles }) {
       store.removeLink(target.id);
 
       await message.reply(
-        `Verifikasi <@${target.id}> (akun TikTok @${link.displayId}) sudah dicabut, beserta semua role milestone/top gifter yang menempel. Datanya perlu klaim ulang dari awal kalau mau diverifikasi lagi.`,
+        `Verifikasi **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}) sudah dicabut, beserta semua role milestone/top gifter yang menempel. Datanya perlu klaim ulang dari awal kalau mau diverifikasi lagi.`,
       );
       return true;
     }
@@ -129,7 +163,7 @@ export function createCommandHandler({ store, config, listener, roles }) {
       }
       if (isModerator(message, config)) {
         lines.push(
-          `\`${prefix}unverify @member\`: (moderator) cabut verifikasi dan semua role member`,
+          `\`${prefix}unverify <username|@member>\`: (moderator) cabut verifikasi dan semua role member`,
         );
       }
       await message.reply(lines.join('\n'));
