@@ -2,7 +2,7 @@ import { EmbedBuilder } from 'discord.js';
 
 import { logger } from './logger.js';
 
-const ENDPOINT = 'https://backend.saweria.co/widgets/leaderboard';
+const ENDPOINT = 'https://backend.saweria.co/widgets/leaderboard/all';
 
 /**
  * Nama saja, tanpa nominal -- ini permintaan eksplisit: member tidak boleh
@@ -11,6 +11,13 @@ const ENDPOINT = 'https://backend.saweria.co/widgets/leaderboard';
 export async function fetchDonatorNames(streamKey) {
   const url = `${ENDPOINT}?stream_key=${encodeURIComponent(streamKey)}`;
   const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+
+  if (response.status === 429) {
+    // Endpoint publik Saweria membatasi jumlah request -- ini bukan bug, dan
+    // siklus polling berikutnya (setelah SAWERIA_UPDATE_MINUTES) otomatis
+    // coba lagi, jadi tidak perlu retry manual di sini.
+    throw new Error('Saweria merespons 429 (rate limit) -- akan dicoba lagi di siklus berikutnya');
+  }
 
   if (!response.ok) {
     throw new Error(`Saweria merespons ${response.status}`);
