@@ -29,7 +29,7 @@ const isImage = (attachment) =>
 export function buildPanel() {
   const embed = new EmbedBuilder()
     .setTitle('🎁 Klaim Role Gift Leaderboard')
-    .setColor(0xff0050)
+    .setColor(0x4a90d9)
     .setDescription(
       [
         'Sudah pernah kirim gift saat LIVE? Kamu bisa klaim role sesuai total coin yang sudah kamu kirim.',
@@ -40,7 +40,7 @@ export function buildPanel() {
         '3. Kirim **screenshot bukti** kepemilikan akun di channel tiket yang otomatis dibuat.',
         '4. Tunggu moderator memverifikasi.',
         '',
-        'Setelah disetujui, role akan diberikan otomatis sesuai total coin kamu — dan terus diperbarui saat kamu kirim gift lagi.',
+        'Setelah disetujui, role akan diberikan otomatis sesuai total coin kamu, dan terus diperbarui saat kamu kirim gift lagi.',
       ].join('\n'),
     );
 
@@ -348,7 +348,7 @@ export class TicketManager {
       grantedText =
         granted.length > 0
           ? `\nRole yang kamu dapat: ${granted.map((m) => `**${m.name}**`).join(', ')}`
-          : '\nBelum ada role milestone yang tercapai — kirim gift lagi saat LIVE untuk naik tingkat.';
+          : '\nBelum ada role milestone yang tercapai. Kirim gift lagi saat LIVE untuk naik tingkat.';
     }
 
     const ticketChannel = await this.#client.channels.fetch(channelId).catch(() => null);

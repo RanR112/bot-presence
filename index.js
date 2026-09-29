@@ -56,6 +56,11 @@ const handleCommand = createCommandHandler({
       return listener?.isLive ?? false;
     },
   },
+  roles: {
+    get instance() {
+      return roles;
+    },
+  },
 });
 
 client.once('clientReady', async () => {
@@ -94,7 +99,7 @@ client.once('clientReady', async () => {
       onGift: (gift) => {
         const total = store.recordGift(gift);
         logger.info(
-          `Gift dari @${gift.displayId ?? gift.userId}: ${gift.coins} coin (${gift.giftName ?? '-'}) — total ${total}`,
+          `Gift dari @${gift.displayId ?? gift.userId}: ${gift.coins} coin (${gift.giftName ?? '-'}), total ${total}`,
         );
       },
       onLiveChange: (isLive) => {

@@ -146,6 +146,41 @@ export class RoleManager {
     return changes;
   }
 
+  /**
+   * Mencabut SEMUA role (milestone + top gifter) dari member yang verifikasinya
+   * dibatalkan moderator. Beda dari `syncMilestones`/`syncTopRoles`: ini aksi
+   * eksplisit sekali jalan, bukan sinkronisasi berkala -- dipakai saat link-nya
+   * sendiri dianggap salah/curang, jadi role yang sudah didapat lewat link itu
+   * ikut ditarik, bukan dibiarkan menempel.
+   */
+  async revokeAllRoles(discordId) {
+    const member = await this.#fetchMember(discordId);
+    if (!member) return;
+
+    for (const definition of [...MILESTONES, ...TOP_ROLES]) {
+      const role = await this.#resolveRole(definition).catch(() => null);
+      if (role && member.roles.cache.has(role.id)) {
+        await member.roles
+          .remove(role, 'Verifikasi TikTok dicabut moderator')
+          .catch((error) =>
+            logger.error(
+              `Gagal mencabut role ${definition.name} dari ${discordId}: ${error.message}`,
+            ),
+          );
+      }
+    }
+
+    const holders = this.#store.getTopHolders();
+    let changed = false;
+    for (const rank of Object.keys(holders)) {
+      if (holders[rank] === discordId) {
+        holders[rank] = null;
+        changed = true;
+      }
+    }
+    if (changed) this.#store.setTopHolders(holders);
+  }
+
   #discordIdForTiktokUser(entry) {
     for (const [discordId, link] of this.#store.allLinks()) {
       if (link.tiktokUserId && link.tiktokUserId === entry.userId) return discordId;

@@ -14,7 +14,7 @@ function renderColumn(entries) {
       const rank = MEDALS[index] ?? `\`${String(index + 1).padStart(2, ' ')}.\``;
       const name = entry.nickname || entry.displayId || 'Tanpa nama';
       const handle = entry.displayId ? ` (@${entry.displayId})` : '';
-      return `${rank} **${name}**${handle} — ${formatCoins(entry.total)}`;
+      return `${rank} **${name}**${handle}: ${formatCoins(entry.total)}`;
     })
     .join('\n');
 }
@@ -29,9 +29,9 @@ export function buildLeaderboardEmbed(store, { topCount, username, isLive }) {
 
   const embed = new EmbedBuilder()
     .setTitle(`🎁 Gift Leaderboard @${username}`)
-    .setColor(isLive ? 0xff0050 : 0x2b2d31)
+    .setColor(isLive ? 0x4a90d9 : 0x2b2d31)
     .setFooter({
-      text: isLive ? 'Sedang LIVE — data diperbarui berkala' : 'Menunggu LIVE berikutnya',
+      text: isLive ? 'Sedang LIVE, data diperbarui berkala' : 'Menunggu LIVE berikutnya',
     })
     .setTimestamp(new Date());
 

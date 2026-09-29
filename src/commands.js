@@ -41,14 +41,21 @@ function levelEmbed(user, link, totals) {
       {
         name: 'Tingkat berikutnya',
         value: next
-          ? `${next.name} — kurang ${formatCoins(next.coins - totals.allTime)} coin`
+          ? `${next.name} (kurang ${formatCoins(next.coins - totals.allTime)} coin)`
           : 'Sudah di tingkat tertinggi 🎉',
         inline: false,
       },
     );
 }
 
-export function createCommandHandler({ store, config, listener }) {
+function isModerator(message, config) {
+  if (message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) return true;
+  return Boolean(
+    config.tickets.modRoleId && message.member?.roles.cache.has(config.tickets.modRoleId),
+  );
+}
+
+export function createCommandHandler({ store, config, listener, roles }) {
   const prefix = config.commandPrefix;
 
   return async function handleCommand(message) {
@@ -85,14 +92,47 @@ export function createCommandHandler({ store, config, listener }) {
       return true;
     }
 
-    if (command === 'help') {
+    if (command === 'unverify') {
+      if (!isModerator(message, config)) {
+        await message.reply('Perintah ini hanya untuk moderator.');
+        return true;
+      }
+
+      const target = message.mentions.users.first();
+      if (!target) {
+        await message.reply(`Format: \`${prefix}unverify @member\``);
+        return true;
+      }
+
+      const link = store.linkForDiscordId(target.id);
+      if (!link) {
+        await message.reply(`<@${target.id}> belum terverifikasi.`);
+        return true;
+      }
+
+      await roles?.instance?.revokeAllRoles(target.id);
+      store.removeLink(target.id);
+
       await message.reply(
-        [
-          `\`${prefix}level [@member]\` — lihat total coin dan tingkat role`,
-          `\`${prefix}leaderboard\` — tampilkan papan peringkat gift`,
-          `\`${prefix}setup-verify\` — (admin) pasang panel verifikasi di channel ini`,
-        ].join('\n'),
+        `Verifikasi <@${target.id}> (akun TikTok @${link.displayId}) sudah dicabut, beserta semua role milestone/top gifter yang menempel. Datanya perlu klaim ulang dari awal kalau mau diverifikasi lagi.`,
       );
+      return true;
+    }
+
+    if (command === 'help') {
+      const lines = [
+        `\`${prefix}level [@member]\`: lihat total coin dan tingkat role`,
+        `\`${prefix}leaderboard\`: tampilkan papan peringkat gift`,
+      ];
+      if (message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
+        lines.push(`\`${prefix}setup-verify\`: (admin) pasang panel verifikasi di channel ini`);
+      }
+      if (isModerator(message, config)) {
+        lines.push(
+          `\`${prefix}unverify @member\`: (moderator) cabut verifikasi dan semua role member`,
+        );
+      }
+      await message.reply(lines.join('\n'));
       return true;
     }
 

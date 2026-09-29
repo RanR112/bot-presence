@@ -119,6 +119,22 @@ export class GiftListener {
       }
     });
 
+    // DIAGNOSTIK SEMENTARA: enterCount yang dipakai project notifier utama
+    // (via polling HTTP) terbukti meleset dari angka asli TikTok (493 vs 671
+    // pada sesi 2026-09-29). totalUser di sini datang dari event WebSocket
+    // yang berbeda -- log ini dipakai untuk bandingkan keduanya di sesi LIVE
+    // berikutnya. Dibatasi 1x/menit supaya tidak membanjiri log (event ini
+    // bisa muncul tiap beberapa detik). Hapus setelah perbandingan selesai.
+    let lastRoomUserLogAt = 0;
+    connection.on(WebcastEvent.ROOM_USER, (data) => {
+      const now = Date.now();
+      if (now - lastRoomUserLogAt < 60_000) return;
+      lastRoomUserLogAt = now;
+      logger.info(
+        `[diagnostik viewer] totalUser=${data.totalUser} total=${data.total} popularity=${data.popularity}`,
+      );
+    });
+
     // Sesi dianggap selesai saat stream berakhir ATAU koneksi putus -- keduanya
     // harus melepas loop supaya listener kembali menunggu LIVE berikutnya.
     await new Promise((done) => {
