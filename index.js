@@ -61,6 +61,11 @@ const handleCommand = createCommandHandler({
       return roles;
     },
   },
+  publisher: {
+    get instance() {
+      return publisher;
+    },
+  },
 });
 
 client.once('clientReady', async () => {
@@ -154,7 +159,7 @@ client.once('clientReady', async () => {
   }
 });
 
-/** Memberi milestone yang baru tercapai ke semua member terverifikasi, lalu menyegarkan Top 1/2/3. */
+/** Memberi milestone yang baru tercapai ke semua member terverifikasi. */
 async function syncAllRoles() {
   if (!roles) return;
 
@@ -162,7 +167,15 @@ async function syncAllRoles() {
     const totals = store.totalsForLink(link);
     if (totals.allTime <= 0) continue;
 
-    const granted = await roles.syncMilestones(discordId, totals.allTime);
+    const { granted, failed, memberNotFound } = await roles.syncMilestones(discordId, totals.allTime);
+    if (memberNotFound) {
+      logger.warn(`Member ${discordId} tidak ditemukan saat sinkronisasi role berkala.`);
+    }
+    if (failed.length > 0) {
+      logger.error(
+        `Gagal memberi role ke ${discordId}: ${failed.map((f) => `${f.name} (${f.reason})`).join(', ')}`,
+      );
+    }
     if (granted.length > 0 && config.levelUpChannelId) {
       const channel = await client.channels.fetch(config.levelUpChannelId).catch(() => null);
       if (channel?.isTextBased()) {

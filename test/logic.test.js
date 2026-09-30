@@ -151,6 +151,40 @@ describe('GiftStore', () => {
     );
   });
 
+  it('rankPositionForDiscordId mengembalikan posisi 1-based yang benar', async () => {
+    const store = await new GiftStore(join(dir, 'c2.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-a', { displayId: 'a', realName: 'A' });
+    store.createLink('discord-b', { displayId: 'b', realName: 'B' });
+    store.createLink('discord-c', { displayId: 'c', realName: 'C' });
+    store.recordGift({ userId: '1', displayId: 'a', coins: 10 });
+    store.recordGift({ userId: '2', displayId: 'b', coins: 90 });
+    store.recordGift({ userId: '3', displayId: 'c', coins: 50 });
+
+    assert.deepEqual(store.rankPositionForDiscordId('discord-b'), {
+      position: 1,
+      total: 90,
+      outOf: 3,
+    });
+    assert.deepEqual(store.rankPositionForDiscordId('discord-c'), {
+      position: 2,
+      total: 50,
+      outOf: 3,
+    });
+    assert.deepEqual(store.rankPositionForDiscordId('discord-a'), {
+      position: 3,
+      total: 10,
+      outOf: 3,
+    });
+  });
+
+  it('rankPositionForDiscordId null kalau belum terverifikasi atau belum ada coin', async () => {
+    const store = await new GiftStore(join(dir, 'c3.json'), 'Asia/Jakarta').load();
+    assert.equal(store.rankPositionForDiscordId('tidak-ada'), null);
+
+    store.createLink('discord-nol', { displayId: 'nol', realName: 'Nol' });
+    assert.equal(store.rankPositionForDiscordId('discord-nol'), null);
+  });
+
   it('link dibuat sebelum user pernah gift tetap nyambung saat gift pertama masuk', async () => {
     const store = await new GiftStore(join(dir, 'd.json'), 'Asia/Jakarta').load();
     store.createLink('discord-1', {
@@ -263,5 +297,67 @@ describe('GiftStore -- addManualCoins (klaim histori coin)', () => {
     assert.equal(store.addManualCoins('discord-5', 0), null);
     assert.equal(store.addManualCoins('discord-5', -10), null);
     assert.equal(store.addManualCoins('discord-5', NaN), null);
+  });
+});
+
+describe('GiftStore -- reduceManualCoins (koreksi coin ke bawah)', () => {
+  let dir;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bp-reduce-'));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('mengurangi total all-time yang sudah ada', async () => {
+    const store = await new GiftStore(join(dir, 'a.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-1', { displayId: 'x', realName: 'A' });
+    store.addManualCoins('discord-1', 500);
+
+    const total = store.reduceManualCoins('discord-1', 200);
+    assert.equal(total, 300);
+  });
+
+  it('tidak pernah minus -- di-floor ke 0 kalau pengurangan melebihi total', async () => {
+    const store = await new GiftStore(join(dir, 'b.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-2', { displayId: 'y', realName: 'B' });
+    store.addManualCoins('discord-2', 50);
+
+    const total = store.reduceManualCoins('discord-2', 999);
+    assert.equal(total, 0);
+  });
+
+  it('balik null kalau member belum terverifikasi', async () => {
+    const store = await new GiftStore(join(dir, 'c.json'), 'Asia/Jakarta').load();
+    assert.equal(store.reduceManualCoins('belum-verifikasi', 100), null);
+  });
+
+  it('balik null kalau member terverifikasi tapi belum punya coin sama sekali', async () => {
+    const store = await new GiftStore(join(dir, 'd.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-3', { displayId: 'z', realName: 'C' });
+    assert.equal(store.reduceManualCoins('discord-3', 50), null);
+  });
+
+  it('cuma mengurangi all-time, TIDAK menyentuh bucket hari/bulan/tahun', async () => {
+    const store = await new GiftStore(join(dir, 'e.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-4', { displayId: 'w', realName: 'D' });
+    store.recordGift({ userId: '444', displayId: 'w', coins: 100 });
+
+    store.reduceManualCoins('discord-4', 40);
+
+    const totals = store.totalsForLink(store.linkForDiscordId('discord-4'));
+    assert.equal(totals.allTime, 60);
+    assert.equal(totals.day, 100, 'bucket hari ini tidak ikut berkurang');
+  });
+
+  it('penguranan jumlah invalid (0/negatif/NaN) diabaikan', async () => {
+    const store = await new GiftStore(join(dir, 'f.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-5', { displayId: 'v', realName: 'E' });
+    store.addManualCoins('discord-5', 100);
+    assert.equal(store.reduceManualCoins('discord-5', 0), null);
+    assert.equal(store.reduceManualCoins('discord-5', -10), null);
+    assert.equal(store.reduceManualCoins('discord-5', NaN), null);
   });
 });

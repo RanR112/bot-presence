@@ -60,20 +60,30 @@ export class RoleManager {
    * Memberi role milestone yang sudah dilewati tapi belum pernah diberikan.
    * Milestone bersifat permanen -- tidak pernah dicabut walau peringkat turun.
    *
-   * @returns {Promise<Array<{ coins: number, name: string }>>} milestone yang baru diberikan
+   * Balikannya berupa objek (bukan cuma array) supaya kegagalan (member tidak
+   * ketemu, role gagal di-assign) TERLIHAT oleh pemanggil, bukan cuma
+   * ke-log ke server dan diam-diam terasa seperti "tidak ada milestone baru".
+   *
+   * @returns {Promise<{ granted: Array<{coins: number, name: string}>, failed: Array<{name: string, reason: string}>, memberNotFound: boolean }>}
    */
   async syncMilestones(discordId, allTimeCoins) {
     const link = this.#store.linkForDiscordId(discordId);
-    if (!link) return [];
+    if (!link) return { granted: [], failed: [], memberNotFound: false };
 
     const already = new Set(link.milestonesGranted ?? []);
     const earned = MILESTONES.filter((m) => allTimeCoins >= m.coins && !already.has(m.coins));
-    if (earned.length === 0) return [];
+    if (earned.length === 0) return { granted: [], failed: [], memberNotFound: false };
 
     const member = await this.#fetchMember(discordId);
-    if (!member) return [];
+    if (!member) {
+      logger.error(
+        `syncMilestones: member ${discordId} tidak ditemukan di guild -- ${earned.length} milestone tertunda (${earned.map((m) => m.name).join(', ')}).`,
+      );
+      return { granted: [], failed: [], memberNotFound: true };
+    }
 
     const granted = [];
+    const failed = [];
     for (const milestone of earned) {
       try {
         const role = await this.#resolveRole(milestone);
@@ -81,6 +91,7 @@ export class RoleManager {
         granted.push(milestone);
       } catch (error) {
         logger.error(`Gagal memberi role ${milestone.name} ke ${discordId}: ${error.message}`);
+        failed.push({ name: milestone.name, reason: error.message });
       }
     }
 
@@ -90,7 +101,7 @@ export class RoleManager {
         granted.map((m) => m.coins),
       );
     }
-    return granted;
+    return { granted, failed, memberNotFound: false };
   }
 
   /**

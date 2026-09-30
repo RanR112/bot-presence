@@ -4,10 +4,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import {
+  infoEmbed,
+  milestoneProgressEmbed,
+  notVerifiedEmbed,
+  progressBar,
+  rankEmbed,
+  saweriaEmbed,
+  statsEmbed,
+} from '../src/commands.js';
 import { GiftStore } from '../src/giftStore.js';
 import { buildLeaderboardEmbed } from '../src/leaderboard.js';
 import { MILESTONES } from '../src/roles.js';
 import { buildPanel } from '../src/tickets.js';
+
+const fakeUser = (overrides = {}) => ({
+  username: 'someone',
+  displayAvatarURL: () => 'https://cdn.discordapp.com/avatar.png',
+  ...overrides,
+});
 
 describe('buildLeaderboardEmbed', () => {
   let dir;
@@ -109,6 +124,110 @@ describe('definisi role', () => {
     for (const role of MILESTONES) {
       assert.ok(role.color >= 0 && role.color <= 0xffffff, `${role.name} warnanya di luar rentang`);
     }
+  });
+});
+
+describe('progressBar', () => {
+  it('0% cuma kotak kosong, 100% cuma kotak terisi', () => {
+    assert.equal(progressBar(0), '⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜');
+    assert.equal(progressBar(1), '🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩');
+  });
+
+  it('membulatkan ke segmen terdekat', () => {
+    assert.equal(progressBar(0.4), '🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜');
+  });
+
+  it('rasio di luar 0..1 di-clamp, tidak error', () => {
+    assert.equal(progressBar(-0.5), '⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜');
+    assert.equal(progressBar(1.5), '🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩');
+  });
+});
+
+describe('notVerifiedEmbed / embed yang butuh link', () => {
+  it('statsEmbed, rankEmbed, milestoneProgressEmbed semua tampil pesan belum terverifikasi kalau link null', () => {
+    const user = fakeUser();
+    for (const embed of [
+      statsEmbed(user, null, { day: 0, month: 0, year: 0, allTime: 0 }),
+      rankEmbed(user, null, { day: 0, month: 0, year: 0, allTime: 0 }, null),
+      milestoneProgressEmbed(user, null, { day: 0, month: 0, year: 0, allTime: 0 }),
+    ]) {
+      assert.equal(embed.toJSON().title, notVerifiedEmbed().toJSON().title);
+    }
+  });
+});
+
+describe('milestoneProgressEmbed', () => {
+  it('menghitung persentase & sisa coin dengan benar di antara dua tingkat', () => {
+    // Silver (100) -> Gold (250), posisi di 160: (160-100)/(250-100) = 40%.
+    const embed = milestoneProgressEmbed(fakeUser(), { displayId: 'x' }, { allTime: 160 });
+    const desc = embed.toJSON().description;
+    assert.ok(desc.includes('40%'), `harus mengandung 40%, dapat: ${desc}`);
+    assert.ok(desc.includes('90'), 'harus menyebutkan sisa 90 coin menuju Gold Fan');
+    assert.ok(desc.includes('Silver Fan'));
+    assert.ok(desc.includes('Gold Fan'));
+  });
+
+  it('di bawah tingkat pertama, range dimulai dari 0', () => {
+    // 25 dari 50 (Bronze) = 50%.
+    const embed = milestoneProgressEmbed(fakeUser(), { displayId: 'x' }, { allTime: 25 });
+    const desc = embed.toJSON().description;
+    assert.ok(desc.includes('50%'));
+    assert.ok(desc.includes('Belum ada'));
+  });
+
+  it('di tingkat tertinggi, tidak ada pembagian dengan nol dan bar penuh', () => {
+    const embed = milestoneProgressEmbed(fakeUser(), { displayId: 'x' }, { allTime: 10000 });
+    const desc = embed.toJSON().description;
+    assert.ok(desc.includes('100%'));
+    assert.ok(desc.includes('tingkat tertinggi'));
+    assert.ok(!desc.includes('NaN'));
+    assert.ok(!desc.includes('Infinity'));
+  });
+});
+
+describe('rankEmbed', () => {
+  it('menampilkan posisi rank kalau ada, atau "belum masuk papan" kalau tidak', () => {
+    const withRank = rankEmbed(
+      fakeUser(),
+      { displayId: 'x' },
+      { allTime: 100 },
+      { position: 3, total: 100, outOf: 20 },
+    );
+    const rankField = withRank.toJSON().fields.find((f) => f.name.includes('Rank Coin'));
+    assert.equal(rankField.value, '#3 dari 20 member');
+
+    const withoutRank = rankEmbed(fakeUser(), { displayId: 'x' }, { allTime: 0 }, null);
+    const rankField2 = withoutRank.toJSON().fields.find((f) => f.name.includes('Rank Coin'));
+    assert.equal(rankField2.value, 'Belum masuk papan');
+  });
+
+  it('selalu punya field placeholder Level Fan Club', () => {
+    const embed = rankEmbed(fakeUser(), { displayId: 'x' }, { allTime: 100 }, null);
+    const field = embed.toJSON().fields.find((f) => f.name.includes('Fan Club'));
+    assert.ok(field, 'harus ada field Level Fan Club sebagai placeholder');
+  });
+});
+
+describe('statsEmbed', () => {
+  it('field-fieldnya tidak kosong untuk member terverifikasi baru (semua nol)', () => {
+    const embed = statsEmbed(
+      fakeUser(),
+      { displayId: 'x' },
+      { day: 0, month: 0, year: 0, allTime: 0 },
+    );
+    for (const field of embed.toJSON().fields) {
+      assert.ok(field.value.length > 0, `field "${field.name}" tidak boleh kosong`);
+    }
+  });
+});
+
+describe('saweriaEmbed / infoEmbed', () => {
+  it('saweriaEmbed mengandung link Saweria yang benar', () => {
+    assert.ok(saweriaEmbed().toJSON().description.includes('https://saweria.co/salmennn'));
+  });
+
+  it('infoEmbed mengarah ke channel info', () => {
+    assert.ok(infoEmbed().toJSON().description.includes('1554521502416773250'));
   });
 });
 

@@ -24,7 +24,7 @@ export const IDS = {
 // Channel info komunitas -- tempat panduan "Cara Klaim History Coin" (lengkap
 // dengan screenshot langkah-langkahnya) diposting, supaya panel & tiket cukup
 // mengarahkan ke sana daripada mengulang instruksinya di sini.
-const INFO_CHANNEL_ID = '1554521502416773250';
+export const INFO_CHANNEL_ID = '1554521502416773250';
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 
@@ -355,11 +355,22 @@ export class TicketManager {
         realName: ticket.realName,
       });
       const totals = this.#store.totalsForLink(this.#store.linkForDiscordId(ticket.discordId));
-      const granted = await this.#roles.syncMilestones(ticket.discordId, totals.allTime);
-      grantedText =
-        granted.length > 0
-          ? `\nRole yang kamu dapat: ${granted.map((m) => `**${m.name}**`).join(', ')}`
-          : '\nBelum ada role milestone yang tercapai. Kirim gift lagi saat LIVE untuk naik tingkat.';
+      const { granted, failed, memberNotFound } = await this.#roles.syncMilestones(
+        ticket.discordId,
+        totals.allTime,
+      );
+      if (granted.length > 0) {
+        grantedText = `\nRole yang kamu dapat: ${granted.map((m) => `**${m.name}**`).join(', ')}`;
+      } else if (memberNotFound || failed.length > 0) {
+        grantedText =
+          '\n⚠️ Ada milestone yang seharusnya didapat tapi role gagal diberikan -- moderator perlu cek log bot.';
+        logger.error(
+          `Gagal memberi role saat approve tiket ${ticket.discordId}: memberNotFound=${memberNotFound}, failed=${JSON.stringify(failed)}`,
+        );
+      } else {
+        grantedText =
+          '\nBelum ada role milestone yang tercapai. Kirim gift lagi saat LIVE untuk naik tingkat.';
+      }
     }
 
     const ticketChannel = await this.#client.channels.fetch(channelId).catch(() => null);

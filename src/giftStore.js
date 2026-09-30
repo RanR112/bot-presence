@@ -118,7 +118,7 @@ export class GiftStore {
   }
 
   /** @param {'day'|'month'|'year'|'allTime'} period */
-  ranking(period, limit = 10) {
+  #allRanked(period) {
     const keys = this.#keys();
     const entries = [];
 
@@ -136,7 +136,32 @@ export class GiftStore {
     }
 
     entries.sort((a, b) => b.total - a.total || a.userId.localeCompare(b.userId));
-    return entries.slice(0, limit);
+    return entries;
+  }
+
+  /** @param {'day'|'month'|'year'|'allTime'} period */
+  ranking(period, limit = 10) {
+    return this.#allRanked(period).slice(0, limit);
+  }
+
+  /**
+   * Posisi member di papan peringkat (1-based), dipakai `>rank`. Balik null
+   * kalau member belum terverifikasi atau belum punya coin sama sekali di
+   * periode itu (tidak masuk papan).
+   *
+   * @param {string} discordId
+   * @param {'day'|'month'|'year'|'allTime'} [period]
+   */
+  rankPositionForDiscordId(discordId, period = 'allTime') {
+    const link = this.#store.get().links[discordId];
+    if (!link) return null;
+
+    const userId = this.#resolvedUserIdFor(link) ?? manualKey(link.displayId ?? '');
+    const ranked = this.#allRanked(period);
+    const index = ranked.findIndex((entry) => entry.userId === userId);
+    if (index === -1) return null;
+
+    return { position: index + 1, total: ranked[index].total, outOf: ranked.length };
   }
 
   #findLinkByDisplayId(displayId) {
@@ -228,6 +253,35 @@ export class GiftStore {
     const user = (data.users[key] ??= emptyUser());
     if (!user.displayId) user.displayId = link.displayId;
     user.allTime += coins;
+    user.lastSeenAt = new Date().toISOString();
+
+    this.#store.scheduleSave();
+    return user.allTime;
+  }
+
+  /**
+   * Kebalikan dari `addManualCoins` -- mengoreksi total yang salah/curang ke
+   * bawah. Cuma menyentuh all-time (sama seperti addManualCoins), dan tidak
+   * pernah minus (di-floor ke 0). SENGAJA tidak mencabut role milestone yang
+   * sudah terlanjur diberikan -- role milestone itu permanen by design (lihat
+   * `RoleManager.syncMilestones`), jadi pengurangan coin di sini murni
+   * koreksi data, bukan aksi cabut role. Kalau butuh cabut role juga, pakai
+   * `>unverify` yang memang didesain untuk itu.
+   *
+   * @returns {number|null} total all-time setelah dikurangi, atau null kalau member belum terverifikasi / belum punya coin sama sekali
+   */
+  reduceManualCoins(discordId, coins) {
+    if (!Number.isFinite(coins) || coins <= 0) return null;
+
+    const data = this.#store.get();
+    const link = data.links[discordId];
+    if (!link) return null;
+
+    const key = this.#resolvedUserIdFor(link) ?? manualKey(link.displayId);
+    const user = data.users[key];
+    if (!user) return null;
+
+    user.allTime = Math.max(0, user.allTime - coins);
     user.lastSeenAt = new Date().toISOString();
 
     this.#store.scheduleSave();

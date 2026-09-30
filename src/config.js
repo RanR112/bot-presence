@@ -62,7 +62,9 @@ export function loadConfig() {
       // beda dari papan gift coin yang cuma jalan selama LIVE. Interval dibuat
       // terpisah (default lebih jarang) karena ini hit endpoint eksternal asli
       // tiap kali, bukan snapshot data yang sudah ada di memori seperti gift coin.
-      updateMinutes: int('SAWERIA_UPDATE_MINUTES', 15),
+      // Default dinaikkan dari 15 ke 30 menit (2026-09-30) -- 15 menit terlalu
+      // sering memicu 429 dari Cloudflare di endpoint Saweria.
+      updateMinutes: int('SAWERIA_UPDATE_MINUTES', 30),
       topCount: int('SAWERIA_TOP_COUNT', 10),
     },
     tickets: {
