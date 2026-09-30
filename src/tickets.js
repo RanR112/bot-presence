@@ -21,6 +21,11 @@ export const IDS = {
   reject: 'verify:reject',
 };
 
+// Channel info komunitas -- tempat panduan "Cara Klaim History Coin" (lengkap
+// dengan screenshot langkah-langkahnya) diposting, supaya panel & tiket cukup
+// mengarahkan ke sana daripada mengulang instruksinya di sini.
+const INFO_CHANNEL_ID = '1554521502416773250';
+
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 
 const isImage = (attachment) =>
@@ -42,7 +47,7 @@ export function buildPanel() {
         '',
         'Setelah disetujui, role akan diberikan otomatis sesuai total coin kamu, dan terus diperbarui saat kamu kirim gift lagi.',
         '',
-        '**Punya riwayat gift dari sebelum bot ini aktif?** Di channel tiket yang sama, kamu juga bisa sekalian klaim coin histori — kirim screenshot **Riwayat Koin** TikTok (filter "Hadiah dikirim") sebagai bukti tambahan, moderator akan menambahkannya ke total kamu.',
+        `**Punya riwayat gift dari sebelum bot ini aktif?** Bisa diklaim juga di channel tiket yang sama, lihat tata caranya di <#${INFO_CHANNEL_ID}>.`,
       ].join('\n'),
     );
 
@@ -226,7 +231,7 @@ export class TicketManager {
           '',
           '**Langkah terakhir:** kirim **screenshot bukti** kepemilikan akun TikTok tersebut di channel ini (misalnya tangkapan layar profil kamu saat sedang login).',
           '',
-          '**Punya riwayat gift dari sebelum bot ini aktif dan mau diklaim juga?** Sekalian kirim screenshot **Riwayat Koin** TikTok kamu di sini juga (Profil → Saldo → ikon riwayat → filter "Hadiah dikirim"), lalu sebutkan total coin-nya. Moderator akan menambahkannya manual ke total kamu.',
+          `**Punya riwayat gift dari sebelum bot ini aktif dan mau diklaim juga?** Bisa sekalian di channel ini juga, lihat tata caranya di <#${INFO_CHANNEL_ID}>.`,
           '',
           'Setelah screenshot terkirim, moderator akan otomatis diberi tahu.',
         ].join('\n'),
