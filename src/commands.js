@@ -205,7 +205,14 @@ async function resolveTarget({ guild, mentions, query, prefix, commandName }) {
   return { target: matches.first().user };
 }
 
-export function createCommandHandler({ store, config, listener, roles, publisher }) {
+export function createCommandHandler({
+  store,
+  config,
+  listener,
+  roles,
+  publisher,
+  fanClubPublisher,
+}) {
   const prefix = config.commandPrefix;
 
   return async function handleCommand(message) {
@@ -331,12 +338,24 @@ export function createCommandHandler({ store, config, listener, roles, publisher
         return true;
       }
 
+      const hadFanClubLevel = link.fanClubLevel != null;
+
       await roles?.instance?.revokeAllRoles(target.id);
       store.removeLink(target.id);
 
       await message.reply(
         `Verifikasi **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}) sudah dicabut, beserta semua role milestone yang menempel. Datanya perlu klaim ulang dari awal kalau mau diverifikasi lagi.`,
       );
+
+      if (hadFanClubLevel) {
+        await fanClubPublisher?.instance
+          ?.publish()
+          .catch((error) =>
+            logger.error(
+              `Gagal memperbarui leaderboard fan club setelah unverify: ${error.message}`,
+            ),
+          );
+      }
       return true;
     }
 
@@ -595,6 +614,12 @@ export function createCommandHandler({ store, config, listener, roles, publisher
             .catch(() => {});
         }
       }
+
+      // Leaderboard fan club tidak punya interval berkala -- perubahan level
+      // langsung terlihat di papan saat itu juga.
+      await fanClubPublisher?.instance
+        ?.publish()
+        .catch((error) => logger.error(`Gagal memperbarui leaderboard fan club: ${error.message}`));
       return true;
     }
 

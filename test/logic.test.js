@@ -413,4 +413,31 @@ describe('GiftStore -- fan club level (klaim manual)', () => {
     assert.equal(store.setFanClubLevel('tidak-ada', 10), null);
     store.setFanClubRoleId('tidak-ada', 'role-x'); // tidak boleh throw
   });
+
+  it('fanClubRanking mengurutkan dari level tertinggi, membuang yang belum diklaim', async () => {
+    const store = await new GiftStore(join(dir, 'd.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-a', { displayId: 'a', realName: 'A' });
+    store.createLink('discord-b', { displayId: 'b', realName: 'B' });
+    store.createLink('discord-c', { displayId: 'c', realName: 'C' }); // belum diklaim
+
+    store.setFanClubLevel('discord-a', 12);
+    store.setFanClubLevel('discord-b', 40);
+
+    const ranking = store.fanClubRanking(10);
+    assert.deepEqual(
+      ranking.map((e) => e.displayId),
+      ['b', 'a'],
+      'urut dari level tertinggi, member yang belum klaim tidak ikut masuk papan',
+    );
+    assert.equal(ranking[0].level, 40);
+  });
+
+  it('fanClubRanking menghormati limit', async () => {
+    const store = await new GiftStore(join(dir, 'e.json'), 'Asia/Jakarta').load();
+    for (let i = 0; i < 5; i += 1) {
+      store.createLink(`discord-${i}`, { displayId: `u${i}`, realName: `U${i}` });
+      store.setFanClubLevel(`discord-${i}`, 10 + i);
+    }
+    assert.equal(store.fanClubRanking(3).length, 3);
+  });
 });

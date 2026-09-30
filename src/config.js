@@ -67,6 +67,10 @@ export function loadConfig() {
       updateMinutes: int('SAWERIA_UPDATE_MINUTES', 30),
       topCount: int('SAWERIA_TOP_COUNT', 10),
     },
+    fanClub: {
+      channelId: snowflake('FANCLUB_LEADERBOARD_CHANNEL_ID', errors),
+      topCount: int('FANCLUB_TOP_COUNT', 10),
+    },
     tickets: {
       modRoleId: snowflake('MOD_ROLE_ID', errors),
       modNotifyChannelId: snowflake('MOD_NOTIFY_CHANNEL_ID', errors),
@@ -86,12 +90,14 @@ export function loadConfig() {
     config.guildId && config.tickets.modRoleId && config.tickets.modNotifyChannelId,
   );
   const saweriaEnabled = Boolean(config.saweria.channelId && config.saweria.streamKey);
+  const fanClubEnabled = Boolean(config.fanClub.channelId);
 
   return {
     ...config,
     leaderboardEnabled,
     ticketsEnabled,
     saweriaEnabled,
+    fanClubEnabled,
     errors,
   };
 }

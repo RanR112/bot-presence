@@ -184,6 +184,28 @@ export class GiftStore {
     return Object.entries(this.#store.get().links);
   }
 
+  /**
+   * Peringkat level Fan Club, diurutkan dari tertinggi. Beda dari `ranking()`
+   * (gift coin, dikunci ke userId TikTok numerik): ini dikunci ke discordId
+   * karena levelnya memang klaim per-member yang sudah terverifikasi, bukan
+   * data yang diamati dari TikTok langsung.
+   */
+  fanClubRanking(limit = 10) {
+    const entries = [];
+    for (const [discordId, link] of Object.entries(this.#store.get().links)) {
+      if (link.fanClubLevel != null) {
+        entries.push({
+          discordId,
+          displayId: link.displayId,
+          realName: link.realName,
+          level: link.fanClubLevel,
+        });
+      }
+    }
+    entries.sort((a, b) => b.level - a.level || a.discordId.localeCompare(b.discordId));
+    return entries.slice(0, limit);
+  }
+
   createLink(discordId, { displayId, realName }) {
     const data = this.#store.get();
     const existing = this.#findLinkByDisplayId(displayId);

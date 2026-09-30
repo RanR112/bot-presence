@@ -4,6 +4,7 @@ import { Client, GatewayIntentBits, Options } from 'discord.js';
 
 import { createCommandHandler } from './src/commands.js';
 import { loadConfig } from './src/config.js';
+import { FanClubLeaderboardPublisher } from './src/fanClubLeaderboard.js';
 import { GiftListener } from './src/giftListener.js';
 import { GiftStore } from './src/giftStore.js';
 import { LeaderboardPublisher } from './src/leaderboard.js';
@@ -47,6 +48,7 @@ let listener = null;
 let roles = null;
 let tickets = null;
 let publisher = null;
+let fanClubPublisher = null;
 
 const handleCommand = createCommandHandler({
   store,
@@ -64,6 +66,11 @@ const handleCommand = createCommandHandler({
   publisher: {
     get instance() {
       return publisher;
+    },
+  },
+  fanClubPublisher: {
+    get instance() {
+      return fanClubPublisher;
     },
   },
 });
@@ -157,6 +164,22 @@ client.once('clientReady', async () => {
     }).start(config.saweria.updateMinutes);
     logger.info(`Saweria leaderboard aktif, refresh tiap ${config.saweria.updateMinutes} menit.`);
   }
+
+  if (config.fanClubEnabled) {
+    fanClubPublisher = new FanClubLeaderboardPublisher({
+      client,
+      store,
+      channelId: config.fanClub.channelId,
+      topCount: config.fanClub.topCount,
+    });
+    // Levelnya cuma berubah lewat command moderator (>setfanclublevel/>unverify),
+    // bukan diamati terus-menerus -- jadi cukup publish sekali di awal, sisanya
+    // diperbarui instan tiap ada perubahan (lihat commands.js), tanpa interval.
+    await fanClubPublisher
+      .publish()
+      .catch((error) => logger.error(`Gagal memasang leaderboard fan club awal: ${error.message}`));
+    logger.info('Fan club leaderboard aktif.');
+  }
 });
 
 /** Memberi milestone yang baru tercapai ke semua member terverifikasi. */
@@ -167,7 +190,10 @@ async function syncAllRoles() {
     const totals = store.totalsForLink(link);
     if (totals.allTime <= 0) continue;
 
-    const { granted, failed, memberNotFound } = await roles.syncMilestones(discordId, totals.allTime);
+    const { granted, failed, memberNotFound } = await roles.syncMilestones(
+      discordId,
+      totals.allTime,
+    );
     if (memberNotFound) {
       logger.warn(`Member ${discordId} tidak ditemukan saat sinkronisasi role berkala.`);
     }

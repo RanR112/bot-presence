@@ -13,6 +13,7 @@ import {
   saweriaEmbed,
   statsEmbed,
 } from '../src/commands.js';
+import { buildFanClubLeaderboardEmbed } from '../src/fanClubLeaderboard.js';
 import { GiftStore } from '../src/giftStore.js';
 import { buildLeaderboardEmbed } from '../src/leaderboard.js';
 import { MILESTONES } from '../src/roles.js';
@@ -242,6 +243,39 @@ describe('saweriaEmbed / infoEmbed', () => {
 
   it('infoEmbed mengarah ke channel info', () => {
     assert.ok(infoEmbed().toJSON().description.includes('1554521502416773250'));
+  });
+});
+
+describe('buildFanClubLeaderboardEmbed', () => {
+  let dir;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bp-fanclub-render-'));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('tetap valid (tidak kosong) saat belum ada data sama sekali', async () => {
+    const store = await new GiftStore(join(dir, 'empty.json'), 'Asia/Jakarta').load();
+    const embed = buildFanClubLeaderboardEmbed(store, { topCount: 10 });
+    assert.ok(embed.toJSON().description.length > 0);
+  });
+
+  it('menampilkan nama, username, dan level terurut dari tertinggi', async () => {
+    const store = await new GiftStore(join(dir, 'ranked.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-a', { displayId: 'kecil', realName: 'Kecil' });
+    store.createLink('discord-b', { displayId: 'besar', realName: 'Besar' });
+    store.setFanClubLevel('discord-a', 10);
+    store.setFanClubLevel('discord-b', 45);
+
+    const desc = buildFanClubLeaderboardEmbed(store, { topCount: 10 }).toJSON().description;
+    assert.ok(desc.startsWith('🥇'));
+    assert.ok(desc.includes('Besar'));
+    assert.ok(desc.includes('@besar'));
+    assert.ok(desc.includes('Lv.45'));
+    assert.ok(desc.indexOf('Besar') < desc.indexOf('Kecil'));
   });
 });
 
