@@ -483,9 +483,23 @@ export function createCommandHandler({ store, config, listener, roles, publisher
         return true;
       }
 
-      await message.reply(
-        `-${formatCoins(amount)} coin dikurangi dari **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}). Total all-time sekarang: ${formatCoins(newTotal)}.\nCatatan: role milestone yang sudah pernah didapat TIDAK ikut dicabut (bersifat permanen). Pakai \`${prefix}unverify\` kalau juga perlu mencabut role.`,
-      );
+      // Role harus ikut disinkronkan -- role sekarang selalu merepresentasikan
+      // tingkat TERTINGGI SAAT INI, jadi kalau total turun di bawah tingkat
+      // yang sedang dipegang, role-nya harus ikut turun (bukan permanen lagi).
+      const syncResult = (await roles?.instance?.syncMilestones(target.id, newTotal)) ?? {
+        granted: [],
+        failed: [],
+        memberNotFound: false,
+      };
+
+      let reply = `-${formatCoins(amount)} coin dikurangi dari **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}). Total all-time sekarang: ${formatCoins(newTotal)}.`;
+      if (syncResult.granted.length > 0) {
+        reply += `\nRole disesuaikan jadi: **${syncResult.granted[0].name}**`;
+      }
+      if (syncResult.failed.length > 0) {
+        reply += `\n⚠️ Gagal menyesuaikan role: ${syncResult.failed.map((f) => f.reason).join(', ')}`;
+      }
+      await message.reply(reply);
 
       // Leaderboard tidak menunggu siklus LIVE berikutnya -- koreksi manual
       // langsung terlihat di papan saat itu juga.

@@ -57,12 +57,17 @@ export class RoleManager {
   }
 
   /**
-   * Memberi role milestone yang sudah dilewati tapi belum pernah diberikan.
-   * Milestone bersifat permanen -- tidak pernah dicabut walau peringkat turun.
+   * Menyelaraskan role milestone member ke TEPAT SATU role -- tingkat
+   * tertinggi yang sudah dicapai. Beda dari desain awal (permanen, menumpuk):
+   * sekarang naik dari Bronze ke Silver berarti Bronze DICABUT dan Silver
+   * DIPASANG, bukan keduanya menempel sekaligus. Kalau member melompat
+   * beberapa tingkat sekaligus (mis. lewat `>addcoin` jumlah besar), yang
+   * dipasang cuma tingkat tertinggi -- tingkat yang dilewati di tengah tidak
+   * pernah benar-benar dipasang jadi tidak perlu dicabut lagi.
    *
-   * Balikannya berupa objek (bukan cuma array) supaya kegagalan (member tidak
-   * ketemu, role gagal di-assign) TERLIHAT oleh pemanggil, bukan cuma
-   * ke-log ke server dan diam-diam terasa seperti "tidak ada milestone baru".
+   * Status "role apa yang sedang dipegang" dibaca langsung dari Discord
+   * (`member.roles.cache`), bukan dari state kita sendiri -- jadi otomatis
+   * konsisten walau sebelumnya sempat salah/menumpuk karena bug.
    *
    * @returns {Promise<{ granted: Array<{coins: number, name: string}>, failed: Array<{name: string, reason: string}>, memberNotFound: boolean }>}
    */
@@ -70,38 +75,47 @@ export class RoleManager {
     const link = this.#store.linkForDiscordId(discordId);
     if (!link) return { granted: [], failed: [], memberNotFound: false };
 
-    const already = new Set(link.milestonesGranted ?? []);
-    const earned = MILESTONES.filter((m) => allTimeCoins >= m.coins && !already.has(m.coins));
-    if (earned.length === 0) return { granted: [], failed: [], memberNotFound: false };
+    const target = MILESTONES.filter((m) => allTimeCoins >= m.coins).at(-1) ?? null;
+    if (!target) return { granted: [], failed: [], memberNotFound: false };
 
     const member = await this.#fetchMember(discordId);
     if (!member) {
       logger.error(
-        `syncMilestones: member ${discordId} tidak ditemukan di guild -- ${earned.length} milestone tertunda (${earned.map((m) => m.name).join(', ')}).`,
+        `syncMilestones: member ${discordId} tidak ditemukan di guild -- seharusnya di tingkat ${target.name}.`,
       );
       return { granted: [], failed: [], memberNotFound: true };
     }
 
-    const granted = [];
     const failed = [];
-    for (const milestone of earned) {
-      try {
-        const role = await this.#resolveRole(milestone);
-        await member.roles.add(role, `Mencapai ${milestone.coins} coin`);
-        granted.push(milestone);
-      } catch (error) {
-        logger.error(`Gagal memberi role ${milestone.name} ke ${discordId}: ${error.message}`);
-        failed.push({ name: milestone.name, reason: error.message });
+    let justGranted = false;
+
+    for (const milestone of MILESTONES) {
+      const role = await this.#resolveRole(milestone);
+      const isTarget = milestone.coins === target.coins;
+      const hasRole = member.roles.cache.has(role.id);
+
+      if (isTarget && !hasRole) {
+        try {
+          await member.roles.add(role, `Naik ke tingkat ${target.name} (${allTimeCoins} coin)`);
+          justGranted = true;
+        } catch (error) {
+          logger.error(`Gagal memberi role ${target.name} ke ${discordId}: ${error.message}`);
+          failed.push({ name: target.name, reason: error.message });
+        }
+        continue;
+      }
+      if (!isTarget && hasRole) {
+        await member.roles
+          .remove(role, `Naik ke tingkat ${target.name}, role lama dicabut`)
+          .catch((error) =>
+            logger.error(
+              `Gagal mencabut role ${milestone.name} dari ${discordId}: ${error.message}`,
+            ),
+          );
       }
     }
 
-    if (granted.length > 0) {
-      this.#store.markMilestonesGranted(
-        discordId,
-        granted.map((m) => m.coins),
-      );
-    }
-    return { granted, failed, memberNotFound: false };
+    return { granted: justGranted ? [target] : [], failed, memberNotFound: false };
   }
 
   /**
@@ -121,7 +135,9 @@ export class RoleManager {
         await member.roles
           .remove(role, 'Verifikasi TikTok dicabut moderator')
           .catch((error) =>
-            logger.error(`Gagal mencabut role ${milestone.name} dari ${discordId}: ${error.message}`),
+            logger.error(
+              `Gagal mencabut role ${milestone.name} dari ${discordId}: ${error.message}`,
+            ),
           );
       }
     }

@@ -206,14 +206,6 @@ describe('GiftStore', () => {
     );
     assert.equal(store.totalsForLink(store.linkForDiscordId('discord-1')).allTime, 75);
   });
-
-  it('milestone yang sudah diberikan tidak terduplikasi', async () => {
-    const store = await new GiftStore(join(dir, 'e.json'), 'Asia/Jakarta').load();
-    store.createLink('discord-2', { displayId: 'x', realName: 'X' });
-    store.markMilestonesGranted('discord-2', [50, 100]);
-    store.markMilestonesGranted('discord-2', [100, 250]);
-    assert.deepEqual(store.linkForDiscordId('discord-2').milestonesGranted, [50, 100, 250]);
-  });
 });
 
 describe('GiftStore -- addManualCoins (klaim histori coin)', () => {

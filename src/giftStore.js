@@ -195,7 +195,6 @@ export class GiftStore {
       realName: realName ?? null,
       tiktokUserId,
       linkedAt: new Date().toISOString(),
-      milestonesGranted: data.links[discordId]?.milestonesGranted ?? [],
     };
     this.#store.scheduleSave();
     return data.links[discordId];
@@ -262,11 +261,10 @@ export class GiftStore {
   /**
    * Kebalikan dari `addManualCoins` -- mengoreksi total yang salah/curang ke
    * bawah. Cuma menyentuh all-time (sama seperti addManualCoins), dan tidak
-   * pernah minus (di-floor ke 0). SENGAJA tidak mencabut role milestone yang
-   * sudah terlanjur diberikan -- role milestone itu permanen by design (lihat
-   * `RoleManager.syncMilestones`), jadi pengurangan coin di sini murni
-   * koreksi data, bukan aksi cabut role. Kalau butuh cabut role juga, pakai
-   * `>unverify` yang memang didesain untuk itu.
+   * pernah minus (di-floor ke 0). Method ini cuma mengoreksi ANGKA -- role
+   * TIDAK otomatis ikut turun di sini; pemanggil (lihat `>reducecoin` di
+   * commands.js) yang bertanggung jawab memanggil `RoleManager.syncMilestones`
+   * lagi setelah ini supaya role ikut disesuaikan ke tingkat yang benar.
    *
    * @returns {number|null} total all-time setelah dikurangi, atau null kalau member belum terverifikasi / belum punya coin sama sekali
    */
@@ -286,15 +284,6 @@ export class GiftStore {
 
     this.#store.scheduleSave();
     return user.allTime;
-  }
-
-  markMilestonesGranted(discordId, coinValues) {
-    const link = this.#store.get().links[discordId];
-    if (!link) return;
-    const granted = new Set(link.milestonesGranted ?? []);
-    for (const value of coinValues) granted.add(value);
-    link.milestonesGranted = [...granted].sort((a, b) => a - b);
-    this.#store.scheduleSave();
   }
 
   getRoleId(name) {
