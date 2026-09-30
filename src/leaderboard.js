@@ -1,6 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 
-import { logger } from './logger.js';
+import { trackedMessagePublisher } from './trackedMessage.js';
 
 const MEDALS = ['🥇', '🥈', '🥉'];
 
@@ -52,6 +52,7 @@ export class LeaderboardPublisher {
   #channelId;
   #topCount;
   #username;
+  #tracker;
 
   constructor({ client, store, channelId, topCount, username }) {
     this.#client = client;
@@ -59,32 +60,22 @@ export class LeaderboardPublisher {
     this.#channelId = channelId;
     this.#topCount = topCount;
     this.#username = username;
+    this.#tracker = trackedMessagePublisher({ store, metaKey: 'leaderboardMessageId' });
   }
 
-  async publish(isLive) {
-    const channel = await this.#client.channels.fetch(this.#channelId).catch(() => null);
-    if (!channel?.isTextBased()) {
-      logger.warn(`Channel leaderboard ${this.#channelId} tidak ditemukan / bukan text channel.`);
-      return;
-    }
-
-    const embed = buildLeaderboardEmbed(this.#store, {
-      topCount: this.#topCount,
-      username: this.#username,
-      isLive,
-    });
-
-    const messageId = this.#store.getMeta('leaderboardMessageId');
-    if (messageId) {
-      const existing = await channel.messages.fetch(messageId).catch(() => null);
-      if (existing) {
-        await existing.edit({ embeds: [embed] });
-        return;
-      }
-      // Pesan lama sudah tidak ada (dihapus manual) -- kirim ulang, jangan diam.
-    }
-
-    const sent = await channel.send({ embeds: [embed] });
-    this.#store.setMeta('leaderboardMessageId', sent.id);
+  publish(isLive) {
+    // buildPayload dipanggil DI DALAM antrean tracker, bukan di sini -- jadi
+    // kalau ada publish() lain yang masih menunggu giliran, embed ini tetap
+    // dibangun dari state store TERBARU saat gilirannya tiba, bukan snapshot
+    // basi dari saat publish() ini dipanggil.
+    return this.#tracker.publishOrEdit(this.#client, this.#channelId, () => ({
+      embeds: [
+        buildLeaderboardEmbed(this.#store, {
+          topCount: this.#topCount,
+          username: this.#username,
+          isLive,
+        }),
+      ],
+    }));
   }
 }

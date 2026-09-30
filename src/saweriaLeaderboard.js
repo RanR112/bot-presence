@@ -1,6 +1,7 @@
 import { EmbedBuilder } from 'discord.js';
 
 import { logger } from './logger.js';
+import { trackedMessagePublisher } from './trackedMessage.js';
 
 const ENDPOINT = 'https://backend.saweria.co/widgets/leaderboard/all';
 
@@ -54,6 +55,7 @@ export class SaweriaLeaderboardPublisher {
   #streamKey;
   #channelId;
   #topCount;
+  #tracker;
 
   constructor({ client, store, streamKey, channelId, topCount }) {
     this.#client = client;
@@ -61,32 +63,17 @@ export class SaweriaLeaderboardPublisher {
     this.#streamKey = streamKey;
     this.#channelId = channelId;
     this.#topCount = topCount;
+    this.#tracker = trackedMessagePublisher({ store, metaKey: 'saweriaLeaderboardMessageId' });
   }
 
-  async publish() {
-    const channel = await this.#client.channels.fetch(this.#channelId).catch(() => null);
-    if (!channel?.isTextBased()) {
-      logger.warn(
-        `Channel Saweria leaderboard ${this.#channelId} tidak ditemukan / bukan text channel.`,
-      );
-      return;
-    }
-
-    const names = await fetchDonatorNames(this.#streamKey);
-    const embed = buildEmbed(names.slice(0, this.#topCount));
-
-    const messageId = this.#store.getMeta('saweriaLeaderboardMessageId');
-    if (messageId) {
-      const existing = await channel.messages.fetch(messageId).catch(() => null);
-      if (existing) {
-        await existing.edit({ embeds: [embed] });
-        return;
-      }
-      // Pesan lama sudah tidak ada (dihapus manual) -- kirim ulang, jangan diam.
-    }
-
-    const sent = await channel.send({ embeds: [embed] });
-    this.#store.setMeta('saweriaLeaderboardMessageId', sent.id);
+  publish() {
+    // fetchDonatorNames dipanggil DI DALAM antrean tracker -- kalau ada
+    // publish() lain yang masih menunggu giliran, data yang diambil tetap
+    // yang paling baru saat gilirannya tiba, bukan snapshot basi.
+    return this.#tracker.publishOrEdit(this.#client, this.#channelId, async () => {
+      const names = await fetchDonatorNames(this.#streamKey);
+      return { embeds: [buildEmbed(names.slice(0, this.#topCount))] };
+    });
   }
 
   start(intervalMinutes) {
