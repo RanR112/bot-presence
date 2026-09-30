@@ -146,6 +146,24 @@ export class TicketManager {
           .setMaxLength(50)
           .setRequired(true),
       ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('historyCoin')
+          .setLabel('Total coin histori (opsional)')
+          .setPlaceholder('Kosongkan kalau tidak ada klaim histori')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(10)
+          .setRequired(false),
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('fanClubLevel')
+          .setLabel('Level Fan Club saat ini (opsional)')
+          .setPlaceholder('Kosongkan kalau tidak punya/tidak diklaim')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(5)
+          .setRequired(false),
+      ),
     );
 
     await interaction.showModal(modal);
@@ -157,6 +175,18 @@ export class TicketManager {
       .getTextInputValue('tiktokUsername')
       .trim()
       .replace(/^@/, '');
+
+    // Dua field opsional -- diabaikan diam-diam kalau kosong atau bukan angka
+    // positif, bukan menolak tiket. Moderator yang menilai kewajarannya nanti
+    // dari screenshot, bukan validasi ketat di sini.
+    const historyCoinRaw = interaction.fields.getTextInputValue('historyCoin').trim();
+    const historyCoinClaim = /^\d+$/.test(historyCoinRaw)
+      ? Number.parseInt(historyCoinRaw, 10)
+      : null;
+    const fanClubLevelRaw = interaction.fields.getTextInputValue('fanClubLevel').trim();
+    const fanClubLevelClaim = /^\d+$/.test(fanClubLevelRaw)
+      ? Number.parseInt(fanClubLevelRaw, 10)
+      : null;
 
     if (!displayId) {
       await interaction.reply({
@@ -211,6 +241,8 @@ export class TicketManager {
       discordId: interaction.user.id,
       realName,
       displayId,
+      historyCoinClaim,
+      fanClubLevelClaim,
       createdAt: new Date().toISOString(),
       screenshotUrl: null,
       submittedAt: null,
@@ -220,6 +252,11 @@ export class TicketManager {
     };
     this.#tickets.scheduleSave();
 
+    const claimLines = [];
+    if (historyCoinClaim !== null) claimLines.push(`**Klaim coin histori:** ${historyCoinClaim}`);
+    if (fanClubLevelClaim !== null)
+      claimLines.push(`**Klaim Level Fan Club:** ${fanClubLevelClaim}`);
+
     const embed = new EmbedBuilder()
       .setTitle('🎫 Tiket Verifikasi')
       .setColor(0x5865f2)
@@ -228,12 +265,15 @@ export class TicketManager {
           `Halo <@${interaction.user.id}>, data kamu sudah tercatat:`,
           `**Nama:** ${realName}`,
           `**Username TikTok:** @${displayId}`,
+          ...claimLines,
           '',
-          '**Langkah terakhir:** kirim **screenshot bukti** kepemilikan akun TikTok tersebut di channel ini (misalnya tangkapan layar profil kamu saat sedang login).',
+          '**Langkah terakhir (wajib):** kirim **screenshot bukti** kepemilikan akun TikTok tersebut di channel ini (misalnya tangkapan layar profil kamu saat sedang login). Ini yang memberi tahu moderator kalau tiket kamu siap direview.',
           '',
-          `**Punya riwayat gift dari sebelum bot ini aktif dan mau diklaim juga?** Bisa sekalian di channel ini juga, lihat tata caranya di <#${INFO_CHANNEL_ID}>.`,
+          historyCoinClaim !== null || fanClubLevelClaim !== null
+            ? `**Untuk klaim coin histori dan/atau Level Fan Club yang kamu isi tadi (opsional):** sekalian kirim juga screenshot buktinya di channel ini (mis. Riwayat Koin TikTok untuk coin histori, tampilan badge Fan Club untuk level). Lihat tata cara lengkapnya di <#${INFO_CHANNEL_ID}>.`
+            : `**Punya riwayat gift atau Level Fan Club yang mau diklaim?** Bisa sekalian di channel ini juga, lihat tata caranya di <#${INFO_CHANNEL_ID}>.`,
           '',
-          'Setelah screenshot terkirim, moderator akan otomatis diberi tahu.',
+          'Setelah screenshot bukti akun TikTok terkirim, moderator akan otomatis diberi tahu.',
         ].join('\n'),
       );
 
@@ -273,27 +313,46 @@ export class TicketManager {
     }
 
     const observed = this.#store.totalsForLink({ displayId: ticket.displayId });
+    const fields = [
+      { name: 'Member', value: `<@${ticket.discordId}>`, inline: true },
+      { name: 'Nama', value: ticket.realName, inline: true },
+      { name: 'Username TikTok', value: `@${ticket.displayId}`, inline: true },
+      {
+        name: 'Coin tercatat bot',
+        value: observed.allTime > 0 ? `${observed.allTime}` : 'Belum ada data',
+        inline: true,
+      },
+      { name: 'Tiket', value: `<#${channelId}>`, inline: true },
+    ];
+    if (ticket.historyCoinClaim !== null) {
+      fields.push({
+        name: 'Klaim coin histori',
+        value: `${ticket.historyCoinClaim}`,
+        inline: true,
+      });
+    }
+    if (ticket.fanClubLevelClaim !== null) {
+      fields.push({
+        name: 'Klaim Level Fan Club',
+        value: `${ticket.fanClubLevelClaim}`,
+        inline: true,
+      });
+    }
+
+    const footerParts = [];
+    if (ticket.historyCoinClaim !== null) footerParts.push('>addcoin buat coin histori');
+    if (ticket.fanClubLevelClaim !== null) footerParts.push('>setfanclublevel buat Fan Club');
+
     const embed = new EmbedBuilder()
       .setTitle('🔔 Permintaan Verifikasi Baru')
       .setColor(0xfaa61a)
-      .addFields(
-        { name: 'Member', value: `<@${ticket.discordId}>`, inline: true },
-        { name: 'Nama', value: ticket.realName, inline: true },
-        {
-          name: 'Username TikTok',
-          value: `@${ticket.displayId}`,
-          inline: true,
-        },
-        {
-          name: 'Coin tercatat bot',
-          value: observed.allTime > 0 ? `${observed.allTime}` : 'Belum ada data',
-          inline: true,
-        },
-        { name: 'Tiket', value: `<#${channelId}>`, inline: true },
-      )
+      .addFields(fields)
       .setImage(ticket.screenshotUrl)
       .setFooter({
-        text: 'Cek juga channel tiket -- kalau ada screenshot Riwayat Koin tambahan, pakai >addcoin setelah menyetujui.',
+        text:
+          footerParts.length > 0
+            ? `Cek screenshot bukti tambahan di channel tiket, lalu pakai ${footerParts.join(' & ')} setelah menyetujui.`
+            : 'Cek juga channel tiket -- kalau ada screenshot Riwayat Koin tambahan, pakai >addcoin setelah menyetujui.',
       })
       .setTimestamp(new Date());
 

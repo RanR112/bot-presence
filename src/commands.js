@@ -56,6 +56,11 @@ export function statsEmbed(user, link, totals) {
           : 'Sudah di tingkat tertinggi 🎉',
         inline: false,
       },
+      {
+        name: 'Level Fan Club',
+        value: link.fanClubLevel != null ? `Lv.${link.fanClubLevel}` : 'Belum diklaim',
+        inline: false,
+      },
     );
 }
 
@@ -82,8 +87,8 @@ export function rankEmbed(user, link, totals, rankInfo) {
         inline: true,
       },
       {
-        name: '🔒 Level Fan Club',
-        value: 'Segera hadir',
+        name: '💜 Level Fan Club',
+        value: link.fanClubLevel != null ? `Lv.${link.fanClubLevel}` : 'Belum diklaim',
         inline: true,
       },
     );
@@ -511,6 +516,88 @@ export function createCommandHandler({ store, config, listener, roles, publisher
       return true;
     }
 
+    if (command === 'setfanclublevel') {
+      if (!isModerator(message, config)) {
+        await message.reply('Perintah ini hanya untuk moderator.');
+        return true;
+      }
+
+      if (
+        config.tickets.modNotifyChannelId &&
+        message.channelId !== config.tickets.modNotifyChannelId
+      ) {
+        await message.reply(
+          `Perintah ini cuma bisa dipakai di <#${config.tickets.modNotifyChannelId}>.`,
+        );
+        return true;
+      }
+
+      const args = message.content.slice(prefix.length).trim().split(/\s+/).slice(1);
+      const levelArg = args.at(-1);
+      const level = Number.parseInt(levelArg, 10);
+      if (!levelArg || !Number.isFinite(level) || level <= 0) {
+        await message.reply(
+          `Format: \`${prefix}setfanclublevel <username_discord|@member> <level>\``,
+        );
+        return true;
+      }
+
+      const setfanclublevelQuery = args.slice(0, -1).join(' ');
+      const resolved = await resolveTarget({
+        guild: message.guild,
+        mentions: message.mentions,
+        query: setfanclublevelQuery,
+        prefix,
+        commandName: 'setfanclublevel',
+      });
+      if (!resolved.target) {
+        await message.reply(resolved.replyText);
+        return true;
+      }
+      const { target } = resolved;
+
+      const link = store.linkForDiscordId(target.id);
+      if (!link) {
+        await message.reply(`**${target.username}** (<@${target.id}>) belum terverifikasi.`);
+        return true;
+      }
+
+      store.setFanClubLevel(target.id, level);
+      const syncResult = (await roles?.instance?.syncFanClubLevel(target.id, level)) ?? {
+        granted: null,
+        failed: null,
+        memberNotFound: false,
+      };
+
+      let reply = `Level Fan Club **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}) diset ke **${level}**.`;
+      if (syncResult.granted) {
+        reply += `\nRole disesuaikan jadi: **${syncResult.granted.name}**`;
+      } else if (level < 5) {
+        reply += `\n(Belum ada role -- role Fan Club baru mulai dari Lv.5.)`;
+      }
+      if (syncResult.memberNotFound) {
+        reply += `\n⚠️ Member tidak ditemukan di server saat pemberian role dicoba.`;
+      }
+      if (syncResult.failed) {
+        reply += `\n⚠️ Gagal memberi role: ${syncResult.failed}`;
+      }
+      await message.reply(reply);
+
+      if (syncResult.granted && config.levelUpChannelId) {
+        const channel = await message.guild.channels
+          .fetch(config.levelUpChannelId)
+          .catch(() => null);
+        if (channel?.isTextBased()) {
+          await channel
+            .send(
+              `🎉 <@${target.id}> naik tingkat Fan Club! Role baru: **${syncResult.granted.name}**`,
+            )
+            .catch(() => {});
+        }
+      }
+      return true;
+    }
+
     if (command === 'help') {
       const lines = [
         `\`${prefix}stats [username|@member]\`: lihat total coin dan tingkat role (kosongkan buat cek diri sendiri)`,
@@ -528,6 +615,7 @@ export function createCommandHandler({ store, config, listener, roles, publisher
           `\`${prefix}unverify <username|@member>\`: (moderator) cabut verifikasi dan semua role member`,
           `\`${prefix}addcoin <username|@member> <jumlah>\`: (moderator) tambah coin histori member`,
           `\`${prefix}reducecoin <username|@member> <jumlah>\`: (moderator) kurangi coin member (role tidak ikut dicabut)`,
+          `\`${prefix}setfanclublevel <username|@member> <level>\`: (moderator) set Level Fan Club member`,
         );
       }
       await message.reply(lines.join('\n'));

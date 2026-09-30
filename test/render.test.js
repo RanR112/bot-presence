@@ -201,10 +201,24 @@ describe('rankEmbed', () => {
     assert.equal(rankField2.value, 'Belum masuk papan');
   });
 
-  it('selalu punya field placeholder Level Fan Club', () => {
-    const embed = rankEmbed(fakeUser(), { displayId: 'x' }, { allTime: 100 }, null);
-    const field = embed.toJSON().fields.find((f) => f.name.includes('Fan Club'));
-    assert.ok(field, 'harus ada field Level Fan Club sebagai placeholder');
+  it('field Level Fan Club menampilkan nilai asli kalau sudah diset moderator', () => {
+    const withLevel = rankEmbed(
+      fakeUser(),
+      { displayId: 'x', fanClubLevel: 23 },
+      { allTime: 100 },
+      null,
+    );
+    const field = withLevel.toJSON().fields.find((f) => f.name.includes('Fan Club'));
+    assert.equal(field.value, 'Lv.23');
+
+    const withoutLevel = rankEmbed(
+      fakeUser(),
+      { displayId: 'x', fanClubLevel: null },
+      { allTime: 100 },
+      null,
+    );
+    const field2 = withoutLevel.toJSON().fields.find((f) => f.name.includes('Fan Club'));
+    assert.equal(field2.value, 'Belum diklaim');
   });
 });
 

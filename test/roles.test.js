@@ -207,3 +207,99 @@ describe('RoleManager.syncMilestones -- satu role aktif, bukan menumpuk', () => 
     assert.deepEqual(result, { granted: [], failed: [], memberNotFound: false });
   });
 });
+
+describe('RoleManager.syncFanClubLevel -- klaim manual moderator, satu role aktif', () => {
+  let dir;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bp-fanclub-roles-'));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function setup(file, guildOpts = {}) {
+    const store = await new GiftStore(join(dir, file), 'Asia/Jakarta').load();
+    store.createLink('discord-1', { displayId: 'x', realName: 'X' });
+    const { guild, heldRoleNamesNow } = mockGuild(guildOpts);
+    const roles = new RoleManager(guild, store);
+    return { roles, store, heldRoleNamesNow };
+  }
+
+  it('level 23 dibulatkan ke bawah jadi band Lv.20', async () => {
+    const { roles, heldRoleNamesNow } = await setup('a.json');
+    const result = await roles.syncFanClubLevel('discord-1', 23);
+
+    assert.deepEqual(result.granted, { level: 23, band: 20, name: 'Fan Lv.20' });
+    assert.deepEqual(heldRoleNamesNow(), ['Fan Lv.20']);
+  });
+
+  it('level di bawah 5: tidak ada role sama sekali (bukan Lv.0)', async () => {
+    const { roles, heldRoleNamesNow } = await setup('b.json');
+    const result = await roles.syncFanClubLevel('discord-1', 3);
+
+    assert.equal(result.granted, null);
+    assert.deepEqual(heldRoleNamesNow(), []);
+  });
+
+  it('naik band: role lama dicabut, role baru dipasang (dilacak lewat fanClubRoleId, bukan enumerasi array tetap)', async () => {
+    const { roles, store, heldRoleNamesNow } = await setup('c.json');
+    await roles.syncFanClubLevel('discord-1', 12); // Lv.10
+    assert.deepEqual(heldRoleNamesNow(), ['Fan Lv.10']);
+    assert.equal(store.linkForDiscordId('discord-1').fanClubRoleId, 'created-Fan Lv.10');
+
+    const result = await roles.syncFanClubLevel('discord-1', 27); // naik ke Lv.25
+    assert.deepEqual(result.granted, { level: 27, band: 25, name: 'Fan Lv.25' });
+    assert.deepEqual(
+      heldRoleNamesNow(),
+      ['Fan Lv.25'],
+      'Fan Lv.10 harus tercabut, tersisa cuma Fan Lv.25',
+    );
+  });
+
+  it('koreksi turun: role tinggi dicabut, diganti band yang lebih rendah', async () => {
+    const { roles, heldRoleNamesNow } = await setup('d.json');
+    await roles.syncFanClubLevel('discord-1', 40); // Lv.40
+    const result = await roles.syncFanClubLevel('discord-1', 8); // dikoreksi turun ke Lv.5
+
+    assert.deepEqual(result.granted, { level: 8, band: 5, name: 'Fan Lv.5' });
+    assert.deepEqual(heldRoleNamesNow(), ['Fan Lv.5']);
+  });
+
+  it('level sama (band sama) dipanggil dua kali: idempoten, tidak ada perubahan', async () => {
+    const { roles, heldRoleNamesNow } = await setup('e.json');
+    await roles.syncFanClubLevel('discord-1', 12);
+    const result = await roles.syncFanClubLevel('discord-1', 14); // masih band 10
+
+    assert.equal(result.granted, null);
+    assert.deepEqual(heldRoleNamesNow(), ['Fan Lv.10']);
+  });
+
+  it('member tidak ditemukan: dilaporkan lewat memberNotFound', async () => {
+    const { roles } = await setup('f.json', { memberExists: false });
+    const result = await roles.syncFanClubLevel('discord-1', 10);
+    assert.equal(result.memberNotFound, true);
+    assert.equal(result.granted, null);
+  });
+
+  it('member belum terverifikasi: balik kosong, tidak crash', async () => {
+    const store = await new GiftStore(join(dir, 'g.json'), 'Asia/Jakarta').load();
+    const { guild } = mockGuild();
+    const roles = new RoleManager(guild, store);
+
+    const result = await roles.syncFanClubLevel('tidak-terverifikasi', 20);
+    assert.deepEqual(result, { granted: null, failed: null, memberNotFound: false });
+  });
+
+  it('revokeAllRoles juga mencabut role fan club', async () => {
+    const { roles, heldRoleNamesNow } = await setup('h.json');
+    await roles.syncFanClubLevel('discord-1', 15);
+    await roles.syncMilestones('discord-1', 60); // sekalian pasang milestone juga
+
+    assert.deepEqual(heldRoleNamesNow().sort(), ['Bronze Fan', 'Fan Lv.15'].sort());
+
+    await roles.revokeAllRoles('discord-1');
+    assert.deepEqual(heldRoleNamesNow(), []);
+  });
+});

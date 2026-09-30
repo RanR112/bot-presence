@@ -6,6 +6,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { normalizeGift } from '../src/giftListener.js';
 import { GiftStore } from '../src/giftStore.js';
+import { fanClubBand } from '../src/roles.js';
 import { periodKeys } from '../src/time.js';
 
 const gift = (overrides = {}) => ({
@@ -351,5 +352,65 @@ describe('GiftStore -- reduceManualCoins (koreksi coin ke bawah)', () => {
     assert.equal(store.reduceManualCoins('discord-5', 0), null);
     assert.equal(store.reduceManualCoins('discord-5', -10), null);
     assert.equal(store.reduceManualCoins('discord-5', NaN), null);
+  });
+});
+
+describe('fanClubBand', () => {
+  it('membulatkan ke bawah ke kelipatan 5 terdekat', () => {
+    assert.equal(fanClubBand(23), 20);
+    assert.equal(fanClubBand(25), 25);
+    assert.equal(fanClubBand(29), 25);
+    assert.equal(fanClubBand(5), 5);
+  });
+
+  it('level di bawah 5 tidak dapat band (null, bukan 0)', () => {
+    assert.equal(fanClubBand(4), null);
+    assert.equal(fanClubBand(1), null);
+    assert.equal(fanClubBand(0), null);
+  });
+
+  it('input tidak valid (negatif/NaN) balik null, tidak crash', () => {
+    assert.equal(fanClubBand(-5), null);
+    assert.equal(fanClubBand(NaN), null);
+  });
+});
+
+describe('GiftStore -- fan club level (klaim manual)', () => {
+  let dir;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bp-fanclub-'));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('createLink membuat fanClubLevel/fanClubRoleId default null', async () => {
+    const store = await new GiftStore(join(dir, 'a.json'), 'Asia/Jakarta').load();
+    const link = store.createLink('discord-1', { displayId: 'x', realName: 'A' });
+    assert.equal(link.fanClubLevel, null);
+    assert.equal(link.fanClubRoleId, null);
+  });
+
+  it('setFanClubLevel meng-set (bukan menambah) dan persist ke link', async () => {
+    const store = await new GiftStore(join(dir, 'b.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-2', { displayId: 'x', realName: 'B' });
+
+    store.setFanClubLevel('discord-2', 23);
+    assert.equal(store.linkForDiscordId('discord-2').fanClubLevel, 23);
+
+    store.setFanClubLevel('discord-2', 8);
+    assert.equal(
+      store.linkForDiscordId('discord-2').fanClubLevel,
+      8,
+      'set kedua harus MENGGANTI, bukan menambahkan ke 23',
+    );
+  });
+
+  it('setFanClubLevel/setFanClubRoleId tidak crash untuk discordId yang belum terverifikasi', async () => {
+    const store = await new GiftStore(join(dir, 'c.json'), 'Asia/Jakarta').load();
+    assert.equal(store.setFanClubLevel('tidak-ada', 10), null);
+    store.setFanClubRoleId('tidak-ada', 'role-x'); // tidak boleh throw
   });
 });

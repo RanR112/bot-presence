@@ -195,9 +195,33 @@ export class GiftStore {
       realName: realName ?? null,
       tiktokUserId,
       linkedAt: new Date().toISOString(),
+      fanClubLevel: data.links[discordId]?.fanClubLevel ?? null,
+      fanClubRoleId: data.links[discordId]?.fanClubRoleId ?? null,
     };
     this.#store.scheduleSave();
     return data.links[discordId];
+  }
+
+  /**
+   * Level Fan Club itu klaim manual (member isi di form tiket, opsional,
+   * dicek moderator dari screenshot), BUKAN hasil observasi otomatis --
+   * makanya di-SET langsung (bukan accumulate seperti coin). Dipanggil dari
+   * `>setfanclublevel`.
+   */
+  setFanClubLevel(discordId, level) {
+    const link = this.#store.get().links[discordId];
+    if (!link) return null;
+    link.fanClubLevel = level;
+    this.#store.scheduleSave();
+    return link;
+  }
+
+  /** Dipanggil RoleManager setelah swap role fan club, supaya tahu role mana yang harus dicabut lain kali. */
+  setFanClubRoleId(discordId, roleId) {
+    const link = this.#store.get().links[discordId];
+    if (!link) return;
+    link.fanClubRoleId = roleId;
+    this.#store.scheduleSave();
   }
 
   removeLink(discordId) {
