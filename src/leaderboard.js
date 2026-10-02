@@ -60,7 +60,11 @@ export class LeaderboardPublisher {
     this.#channelId = channelId;
     this.#topCount = topCount;
     this.#username = username;
-    this.#tracker = trackedMessagePublisher({ store, metaKey: 'leaderboardMessageId' });
+    this.#tracker = trackedMessagePublisher({
+      store,
+      metaKey: 'leaderboardMessageId',
+      embedTitle: `🎁 Gift Leaderboard @${username}`,
+    });
   }
 
   publish(isLive) {

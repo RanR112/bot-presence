@@ -66,6 +66,10 @@ export function loadConfig() {
       // sering memicu 429 dari Cloudflare di endpoint Saweria.
       updateMinutes: int('SAWERIA_UPDATE_MINUTES', 30),
       topCount: int('SAWERIA_TOP_COUNT', 10),
+      // Channel terkunci (member biasa tidak boleh kirim pesan) tempat
+      // webhook Discord Saweria memposting tiap donasi masuk -- dipakai
+      // buat konversi real-time ke coin, terpisah dari leaderboard di atas.
+      webhookChannelId: snowflake('SAWERIA_WEBHOOK_CHANNEL_ID', errors),
     },
     fanClub: {
       channelId: snowflake('FANCLUB_LEADERBOARD_CHANNEL_ID', errors),
@@ -77,8 +81,14 @@ export function loadConfig() {
       categoryId: snowflake('TICKET_CATEGORY_ID', errors),
       // Discord tidak punya read-receipt yang bisa dibaca bot, jadi tiket tidak
       // bisa ditutup "5 menit setelah dibaca". Fallback: sekian jam setelah
-      // moderator memutuskan.
+      // moderator memutuskan (atau setelah mod menutup tiket umum).
       closeAfterHours: int('TICKET_CLOSE_AFTER_HOURS', 24),
+      // Ketiganya opsional -- panel yang channel ID-nya belum diisi cuma
+      // dilewati (tidak dipasang), bukan dianggap error. Dipasang/disegarkan
+      // otomatis tiap bot start (lihat index.js), tidak perlu command manual.
+      tiktokPanelChannelId: snowflake('VERIFY_TIKTOK_CHANNEL_ID', errors),
+      saweriaPanelChannelId: snowflake('VERIFY_SAWERIA_CHANNEL_ID', errors),
+      generalPanelChannelId: snowflake('CREATE_TICKET_CHANNEL_ID', errors),
     },
     levelUpChannelId: snowflake('LEVELUP_CHANNEL_ID', errors),
   };

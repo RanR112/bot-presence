@@ -3,6 +3,7 @@ import { EmbedBuilder } from 'discord.js';
 import { trackedMessagePublisher } from './trackedMessage.js';
 
 const MEDALS = ['🥇', '🥈', '🥉'];
+const EMBED_TITLE = '💜 Fan Club Leaderboard';
 
 function renderColumn(entries) {
   if (entries.length === 0) return '_Belum ada data._';
@@ -18,10 +19,10 @@ function renderColumn(entries) {
 
 export function buildFanClubLeaderboardEmbed(store, { topCount }) {
   return new EmbedBuilder()
-    .setTitle('💜 Fan Club Leaderboard')
+    .setTitle(EMBED_TITLE)
     .setColor(0x9b59b6)
     .setDescription(renderColumn(store.fanClubRanking(topCount)))
-    .setFooter({ text: 'Level Fan Club diset manual oleh moderator lewat verifikasi.' })
+    .setFooter({ text: 'Level diamati otomatis dari chat/gift/join saat LIVE.' })
     .setTimestamp(new Date());
 }
 
@@ -37,7 +38,11 @@ export class FanClubLeaderboardPublisher {
     this.#store = store;
     this.#channelId = channelId;
     this.#topCount = topCount;
-    this.#tracker = trackedMessagePublisher({ store, metaKey: 'fanClubLeaderboardMessageId' });
+    this.#tracker = trackedMessagePublisher({
+      store,
+      metaKey: 'fanClubLeaderboardMessageId',
+      embedTitle: EMBED_TITLE,
+    });
   }
 
   publish() {

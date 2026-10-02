@@ -42,23 +42,55 @@ export function normalizeGift(data) {
   };
 }
 
+/**
+ * Baca level Fan Club dari field `user.fansClub` -- field ini menumpang di
+ * SETIAP event yang membawa objek `user` (chat/gift/join), bukan cuma gift.
+ * TikTok cuma mengisi field ini kalau user itu memang anggota fan club
+ * creator yang sedang ditonton; non-member -> `fansClub` undefined.
+ *
+ * @returns {{ userId: string, displayId: string|null, nickname: string|null, level: number }|null}
+ */
+export function normalizeFanClub(user) {
+  const level = user?.fansClub?.data?.level;
+  if (!user?.id || !Number.isFinite(level) || level <= 0) return null;
+
+  return {
+    userId: String(user.id),
+    displayId: user.displayId || null,
+    nickname: user.nickname || null,
+    level,
+  };
+}
+
 export class GiftListener {
   #username;
   #pollMs;
   #onGift;
+  #onFanClub;
   #onLiveChange;
   #running = false;
   #connection = null;
 
-  constructor({ username, pollSeconds, onGift, onLiveChange }) {
+  constructor({ username, pollSeconds, onGift, onFanClub, onLiveChange }) {
     this.#username = username;
     this.#pollMs = pollSeconds * 1000;
     this.#onGift = onGift;
+    this.#onFanClub = onFanClub ?? (() => {});
     this.#onLiveChange = onLiveChange ?? (() => {});
   }
 
   get isLive() {
     return Boolean(this.#connection?.isConnected);
+  }
+
+  #emitFanClub(user) {
+    const fanClub = normalizeFanClub(user);
+    if (!fanClub) return;
+    try {
+      this.#onFanClub(fanClub);
+    } catch (error) {
+      logger.error(`Gagal memproses data fan club: ${error.message}`);
+    }
   }
 
   start() {
@@ -111,13 +143,22 @@ export class GiftListener {
 
     connection.on(WebcastEvent.GIFT, (data) => {
       const gift = normalizeGift(data);
-      if (!gift) return;
-      try {
-        this.#onGift(gift);
-      } catch (error) {
-        logger.error(`Gagal memproses gift: ${error.message}`);
+      if (gift) {
+        try {
+          this.#onGift(gift);
+        } catch (error) {
+          logger.error(`Gagal memproses gift: ${error.message}`);
+        }
       }
+      this.#emitFanClub(data?.user);
     });
+
+    // Level Fan Club diamati dari SETIAP interaksi (chat/join), bukan cuma
+    // gift -- supaya member yang cuma nonton+chat (tidak pernah gift) tetap
+    // ketahuan levelnya, persis seperti permintaan user: tercatat meskipun
+    // akun TikTok-nya belum terverifikasi di Discord.
+    connection.on(WebcastEvent.CHAT, (data) => this.#emitFanClub(data?.user));
+    connection.on(WebcastEvent.MEMBER, (data) => this.#emitFanClub(data?.user));
 
     // DIAGNOSTIK SEMENTARA: enterCount yang dipakai project notifier utama
     // (via polling HTTP) terbukti meleset dari angka asli TikTok (493 vs 671

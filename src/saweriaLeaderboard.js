@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 import { trackedMessagePublisher } from './trackedMessage.js';
 
 const ENDPOINT = 'https://backend.saweria.co/widgets/leaderboard/all';
+const EMBED_TITLE = '💙 Saweria Leaderboard (All Time)';
 
 /**
  * Nama saja, tanpa nominal -- ini permintaan eksplisit: member tidak boleh
@@ -42,7 +43,7 @@ function buildEmbed(names) {
       : '_Belum ada data._';
 
   return new EmbedBuilder()
-    .setTitle('💙 Saweria Leaderboard (All Time)')
+    .setTitle(EMBED_TITLE)
     .setColor(0x4a90d9)
     .setDescription(list)
     .setFooter({ text: 'Nominal donasi disembunyikan -- hanya urutan yang ditampilkan.' })
@@ -63,7 +64,11 @@ export class SaweriaLeaderboardPublisher {
     this.#streamKey = streamKey;
     this.#channelId = channelId;
     this.#topCount = topCount;
-    this.#tracker = trackedMessagePublisher({ store, metaKey: 'saweriaLeaderboardMessageId' });
+    this.#tracker = trackedMessagePublisher({
+      store,
+      metaKey: 'saweriaLeaderboardMessageId',
+      embedTitle: EMBED_TITLE,
+    });
   }
 
   publish() {

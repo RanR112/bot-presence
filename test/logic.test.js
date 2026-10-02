@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { normalizeGift } from '../src/giftListener.js';
+import { normalizeFanClub, normalizeGift } from '../src/giftListener.js';
 import { GiftStore } from '../src/giftStore.js';
 import { fanClubBand } from '../src/roles.js';
 import { periodKeys } from '../src/time.js';
@@ -64,6 +64,45 @@ describe('normalizeGift — semantik streak', () => {
   it('repeatCount tidak wajar tidak bikin coin jadi NaN/negatif', () => {
     const result = normalizeGift(gift({ gift: { type: 2, diamondCount: 10 }, repeatCount: -5 }));
     assert.equal(result.coins, 10);
+  });
+});
+
+describe('normalizeFanClub — baca user.fansClub dari event apa pun (chat/gift/join)', () => {
+  const userWithFanClub = (level, overrides = {}) => ({
+    id: '111',
+    displayId: 'someone',
+    nickname: 'Some One',
+    fansClub: { data: { level, clubName: 'x', anchorId: '999' } },
+    ...overrides,
+  });
+
+  it('mengambil level dari user.fansClub.data.level', () => {
+    const result = normalizeFanClub(userWithFanClub(23));
+    assert.deepEqual(result, {
+      userId: '111',
+      displayId: 'someone',
+      nickname: 'Some One',
+      level: 23,
+    });
+  });
+
+  it('user yang BUKAN anggota fan club (fansClub undefined) -> null, bukan error', () => {
+    assert.equal(normalizeFanClub({ id: '1', displayId: 'bukan-member' }), null);
+  });
+
+  it('level 0 atau tidak valid diabaikan', () => {
+    assert.equal(normalizeFanClub(userWithFanClub(0)), null);
+    assert.equal(normalizeFanClub(userWithFanClub(-5)), null);
+    assert.equal(normalizeFanClub(userWithFanClub(NaN)), null);
+  });
+
+  it('user tanpa id diabaikan (tidak crash)', () => {
+    assert.equal(normalizeFanClub({ fansClub: { data: { level: 10 } } }), null);
+  });
+
+  it('input null/undefined tidak crash', () => {
+    assert.equal(normalizeFanClub(null), null);
+    assert.equal(normalizeFanClub(undefined), null);
   });
 });
 
@@ -439,5 +478,276 @@ describe('GiftStore -- fan club level (klaim manual)', () => {
       store.setFanClubLevel(`discord-${i}`, 10 + i);
     }
     assert.equal(store.fanClubRanking(3).length, 3);
+  });
+});
+
+describe('GiftStore -- fan club level (observasi otomatis)', () => {
+  let dir;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bp-fanclub-observed-'));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('recordFanClubLevel SET (menimpa), bukan accumulate seperti coin', async () => {
+    const store = await new GiftStore(join(dir, 'a.json'), 'Asia/Jakarta').load();
+    store.recordFanClubLevel({ userId: '111', displayId: 'x', nickname: 'X', level: 10 });
+    store.recordFanClubLevel({ userId: '111', displayId: 'x', nickname: 'X', level: 15 });
+
+    store.createLink('discord-1', { displayId: 'x', realName: 'X' });
+    assert.equal(store.effectiveFanClubLevel(store.linkForDiscordId('discord-1')), 15);
+  });
+
+  it('tercatat untuk SIAPA PUN, termasuk yang belum terverifikasi sama sekali', async () => {
+    const store = await new GiftStore(join(dir, 'b.json'), 'Asia/Jakarta').load();
+    store.recordFanClubLevel({ userId: '222', displayId: 'belum-verif', nickname: null, level: 7 });
+
+    const ranking = store.fanClubRanking(10);
+    assert.equal(ranking.length, 1);
+    assert.equal(ranking[0].displayId, 'belum-verif');
+    assert.equal(ranking[0].level, 7);
+  });
+
+  it('effectiveFanClubLevel: observasi MENANG kalau sudah ada, fallback ke manual kalau belum', async () => {
+    const store = await new GiftStore(join(dir, 'c.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-2', { displayId: 'y', realName: 'Y' });
+
+    // Belum pernah teramati -- pakai klaim manual.
+    store.setFanClubLevel('discord-2', 5);
+    assert.equal(store.effectiveFanClubLevel(store.linkForDiscordId('discord-2')), 5);
+
+    // Begitu teramati lewat event real-time, observasi MENANG walau lebih kecil
+    // dari klaim manual -- observasi dianggap lebih akurat/terkini.
+    store.recordFanClubLevel({ userId: '333', displayId: 'y', nickname: 'Y', level: 3 });
+    assert.equal(
+      store.effectiveFanClubLevel(store.linkForDiscordId('discord-2')),
+      3,
+      'observasi real-time menang atas klaim manual lama',
+    );
+  });
+
+  it('effectiveFanClubLevel balik null untuk member belum terverifikasi/belum ada data sama sekali', async () => {
+    const store = await new GiftStore(join(dir, 'd.json'), 'Asia/Jakarta').load();
+    assert.equal(store.effectiveFanClubLevel(null), null);
+
+    store.createLink('discord-3', { displayId: 'z', realName: 'Z' });
+    assert.equal(store.effectiveFanClubLevel(store.linkForDiscordId('discord-3')), null);
+  });
+
+  it('fanClubRanking menggabungkan observasi + manual TANPA duplikat untuk akun yang sama', async () => {
+    const store = await new GiftStore(join(dir, 'e.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-4', { displayId: 'gabung', realName: 'Gabung' });
+    store.setFanClubLevel('discord-4', 5); // klaim manual dulu
+
+    store.recordFanClubLevel({
+      userId: '444',
+      displayId: 'gabung',
+      nickname: 'Gabung',
+      level: 20,
+    }); // lalu teramati dengan level lebih tinggi
+
+    const ranking = store.fanClubRanking(10);
+    assert.equal(
+      ranking.length,
+      1,
+      'tidak boleh ada 2 entri (observasi + manual) untuk akun yang sama',
+    );
+    assert.equal(
+      ranking[0].level,
+      20,
+      'entri yang dipakai harus dari hasil observasi, bukan manual',
+    );
+  });
+
+  it('fanClubRanking: observasi (belum terverifikasi) dan manual (sudah terverifikasi, belum teramati) tampil berdampingan', async () => {
+    const store = await new GiftStore(join(dir, 'f.json'), 'Asia/Jakarta').load();
+    store.recordFanClubLevel({
+      userId: '555',
+      displayId: 'cuma-nonton',
+      nickname: null,
+      level: 30,
+    });
+
+    store.createLink('discord-5', { displayId: 'sudah-verif', realName: 'Verif' });
+    store.setFanClubLevel('discord-5', 12);
+
+    const ranking = store.fanClubRanking(10);
+    assert.deepEqual(
+      ranking.map((e) => e.displayId),
+      ['cuma-nonton', 'sudah-verif'],
+    );
+  });
+
+  it('recordFanClubLevel mengabaikan payload tidak valid tanpa crash', async () => {
+    const store = await new GiftStore(join(dir, 'g.json'), 'Asia/Jakarta').load();
+    store.recordFanClubLevel({ userId: null, level: 10 });
+    store.recordFanClubLevel({ userId: '1', level: 0 });
+    store.recordFanClubLevel({ userId: '1', level: NaN });
+    assert.deepEqual(store.fanClubRanking(10), []);
+  });
+});
+
+describe('GiftStore -- konversi donasi Saweria ke coin', () => {
+  let dir;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bp-saweria-'));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('donasi dari nama yang BELUM ditautkan cuma masuk ledger, tidak mengkredit siapa pun', async () => {
+    const store = await new GiftStore(join(dir, 'a.json'), 'Asia/Jakarta').load();
+    const result = store.recordSaweriaDonation({ donorName: 'Someguy', rupiah: 5000 });
+    assert.equal(result.credited, false);
+  });
+
+  it('linkSaweriaDonor menautkan nama donatur dan langsung catch-up histori ledger jadi coin', async () => {
+    const store = await new GiftStore(join(dir, 'b.json'), 'Asia/Jakarta').load();
+    store.recordSaweriaDonation({ donorName: 'Someguy', rupiah: 5000 }); // Rp5.000 / Rp200 = 25 coin
+
+    const result = store.linkSaweriaDonor('discord-1', 'Someguy');
+    assert.equal(result.credited, true);
+    assert.equal(result.deltaCoins, 25);
+    assert.equal(result.newTotal, 25);
+    assert.equal(store.linkForDiscordId('discord-1').saweriaDonorName, 'Someguy');
+  });
+
+  it('donasi berikutnya SETELAH ditautkan otomatis mengkredit tanpa perlu verify ulang', async () => {
+    const store = await new GiftStore(join(dir, 'c.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-2', 'Rav'); // tautkan duluan, belum ada histori
+
+    const result = store.recordSaweriaDonation({ donorName: 'Rav', rupiah: 1000 }); // 5 coin
+    assert.equal(result.credited, true);
+    assert.equal(result.deltaCoins, 5);
+    assert.equal(result.newTotal, 5);
+  });
+
+  it('pencocokan nama donatur TIDAK peka huruf besar/kecil', async () => {
+    const store = await new GiftStore(join(dir, 'd.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-3', 'RavRafael');
+
+    const result = store.recordSaweriaDonation({ donorName: 'ravrafael', rupiah: 400 }); // 2 coin
+    assert.equal(result.credited, true);
+    assert.equal(result.deltaCoins, 2);
+  });
+
+  it('nama donatur yang sudah ditautkan ke member lain tidak bisa ditautkan ulang', async () => {
+    const store = await new GiftStore(join(dir, 'e.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-4', 'Unik');
+
+    const result = store.linkSaweriaDonor('discord-5', 'Unik');
+    assert.equal(result.error, 'taken');
+  });
+
+  it('rupiah sisa (belum cukup 1 coin) tidak hilang -- terbawa ke donasi berikutnya', async () => {
+    const store = await new GiftStore(join(dir, 'f.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-6', 'Pecahan');
+
+    const first = store.recordSaweriaDonation({ donorName: 'Pecahan', rupiah: 150 }); // < 200, belum 1 coin
+    assert.equal(first.credited, false);
+
+    const second = store.recordSaweriaDonation({ donorName: 'Pecahan', rupiah: 150 }); // total 300 -> 1 coin
+    assert.equal(second.credited, true);
+    assert.equal(second.deltaCoins, 1);
+  });
+
+  it('linkSaweriaDonor tidak mensyaratkan akun TikTok sudah tertaut -- bikin link baru kalau belum ada', async () => {
+    const store = await new GiftStore(join(dir, 'g.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-7', 'Baru');
+
+    const link = store.linkForDiscordId('discord-7');
+    assert.equal(link.displayId, null);
+    assert.equal(link.saweriaDonorName, 'Baru');
+  });
+
+  it('createLink (verify t) tidak menghapus saweriaDonorName yang sudah ditautkan lebih dulu', async () => {
+    const store = await new GiftStore(join(dir, 'h.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-8', 'Gabungan');
+    store.createLink('discord-8', { displayId: 'tiktoknya', realName: 'Nama' });
+
+    const link = store.linkForDiscordId('discord-8');
+    assert.equal(link.displayId, 'tiktoknya');
+    assert.equal(link.saweriaDonorName, 'Gabungan', 'verify t tidak boleh menimpa tautan Saweria yang sudah ada');
+  });
+
+  it('linkSaweriaDonor tidak menghapus displayId TikTok yang sudah ditautkan lebih dulu', async () => {
+    const store = await new GiftStore(join(dir, 'i.json'), 'Asia/Jakarta').load();
+    store.createLink('discord-9', { displayId: 'tiktoknya', realName: 'Nama' });
+    store.linkSaweriaDonor('discord-9', 'NamaSaweria');
+
+    const link = store.linkForDiscordId('discord-9');
+    assert.equal(link.displayId, 'tiktoknya');
+    assert.equal(link.saweriaDonorName, 'NamaSaweria');
+  });
+
+  it('totalsForLink membaca coin dari member yang CUMA tertaut lewat Saweria (belum ada TikTok)', async () => {
+    const store = await new GiftStore(join(dir, 'j.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-10', 'HanyaSaweria');
+    store.recordSaweriaDonation({ donorName: 'HanyaSaweria', rupiah: 2000 }); // 10 coin
+
+    const totals = store.totalsForLink(store.linkForDiscordId('discord-10'));
+    assert.equal(totals.allTime, 10);
+  });
+
+  it('verify t SETELAH verify s menggabungkan coin Saweria yang sudah terkumpul ke entri TikTok', async () => {
+    const store = await new GiftStore(join(dir, 'k.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-11', 'GabungBelakangan');
+    store.recordSaweriaDonation({ donorName: 'GabungBelakangan', rupiah: 4000 }); // 20 coin, belum ada akun TikTok
+
+    store.createLink('discord-11', { displayId: 'barutiktok', realName: 'Baru' });
+
+    const totals = store.totalsForLink(store.linkForDiscordId('discord-11'));
+    assert.equal(totals.allTime, 20, '20 coin dari Saweria harus ikut pindah ke entri TikTok yang baru ditautkan');
+
+    // Donasi Saweria berikutnya tetap kekredit ke member yang sama (nama masih tertaut).
+    const result = store.recordSaweriaDonation({ donorName: 'GabungBelakangan', rupiah: 1000 }); // +5 coin
+    assert.equal(result.credited, true);
+    assert.equal(result.deltaCoins, 5);
+    assert.equal(result.newTotal, 25);
+  });
+
+  it('donasi real-time (webhook, SUDAH ditautkan) ikut masuk bucket hari/bulan/tahun, bukan cuma all-time', async () => {
+    const store = await new GiftStore(join(dir, 'l.json'), 'Asia/Jakarta').load();
+    store.linkSaweriaDonor('discord-12', 'RealTime');
+
+    store.recordSaweriaDonation({ donorName: 'RealTime', rupiah: 2000 }); // 10 coin
+
+    const totals = store.totalsForLink(store.linkForDiscordId('discord-12'));
+    assert.equal(totals.allTime, 10);
+    assert.equal(totals.day, 10, 'donasi yang baru terjadi harus ikut kehitung hari ini');
+    assert.equal(totals.month, 10);
+    assert.equal(totals.year, 10);
+  });
+
+  it('linkForSaweriaName dan saweriaLedgerTotal dipakai alur tiket buat cek klaim duplikat & cross-check nominal', async () => {
+    const store = await new GiftStore(join(dir, 'n.json'), 'Asia/Jakarta').load();
+    assert.equal(store.linkForSaweriaName('BelumAda'), null);
+    assert.equal(store.saweriaLedgerTotal('BelumAda'), 0);
+
+    store.linkSaweriaDonor('discord-14', 'SudahAda');
+    store.recordSaweriaDonation({ donorName: 'SudahAda', rupiah: 1500 });
+
+    const found = store.linkForSaweriaName('sudahada'); // tidak peka huruf besar/kecil
+    assert.equal(found.discordId, 'discord-14');
+    assert.equal(store.saweriaLedgerTotal('SUDAHADA'), 1500);
+  });
+
+  it('catch-up histori lewat verify s (ledger SEBELUM ditautkan) CUMA masuk all-time, bukan aktivitas hari ini', async () => {
+    const store = await new GiftStore(join(dir, 'm.json'), 'Asia/Jakarta').load();
+    store.recordSaweriaDonation({ donorName: 'Histori', rupiah: 3000 }); // numpuk duluan, belum tertaut
+
+    store.linkSaweriaDonor('discord-13', 'Histori'); // baru ditautkan sekarang -- catch-up 15 coin
+
+    const totals = store.totalsForLink(store.linkForDiscordId('discord-13'));
+    assert.equal(totals.allTime, 15);
+    assert.equal(totals.day, 0, 'catch-up histori bukan aktivitas hari ini');
+    assert.equal(totals.month, 0);
+    assert.equal(totals.year, 0);
   });
 });

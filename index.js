@@ -12,7 +12,17 @@ import { logger } from './src/logger.js';
 import { applyPresence } from './src/presence.js';
 import { RoleManager } from './src/roles.js';
 import { SaweriaLeaderboardPublisher } from './src/saweriaLeaderboard.js';
-import { TicketManager } from './src/tickets.js';
+import { parseSaweriaWebhookMessage } from './src/saweriaWebhook.js';
+import {
+  buildGeneralPanel,
+  buildSaweriaPanel,
+  buildTiktokPanel,
+  GENERAL_PANEL_TITLE,
+  SAWERIA_PANEL_TITLE,
+  TicketManager,
+  TIKTOK_PANEL_TITLE,
+} from './src/tickets.js';
+import { trackedMessagePublisher } from './src/trackedMessage.js';
 
 const config = loadConfig();
 
@@ -105,6 +115,7 @@ client.once('clientReady', async () => {
       username: config.tiktok.username,
     });
 
+    let lastFanClubLogAt = 0;
     listener = new GiftListener({
       username: config.tiktok.username,
       pollSeconds: config.tiktok.livePollSeconds,
@@ -114,11 +125,32 @@ client.once('clientReady', async () => {
           `Gift dari @${gift.displayId ?? gift.userId}: ${gift.coins} coin (${gift.giftName ?? '-'}), total ${total}`,
         );
       },
+      onFanClub: (fanClub) => {
+        // DIAGNOSTIK SEMENTARA: belum sempat diverifikasi ke data LIVE
+        // sungguhan saat fitur ini ditulis (field user.fansClub ADA di skema
+        // proto, tapi belum dilihat langsung terisi data nyata). Dibatasi
+        // 1x/menit supaya tidak membanjiri log kalau banyak member fan club
+        // aktif chat. Hapus setelah dikonfirmasi di sesi LIVE berikutnya.
+        if (Date.now() - lastFanClubLogAt > 60_000) {
+          lastFanClubLogAt = Date.now();
+          logger.info(
+            `[diagnostik fan club] @${fanClub.displayId ?? fanClub.userId}: Lv.${fanClub.level}`,
+          );
+        }
+        store.recordFanClubLevel(fanClub);
+      },
       onLiveChange: (isLive) => {
         publisher
           ?.publish(isLive)
           .catch((error) => logger.error(`Gagal memperbarui leaderboard: ${error.message}`));
-        if (!isLive) syncAllRoles().catch(() => {});
+        if (!isLive) {
+          syncAllRoles().catch(() => {});
+          fanClubPublisher
+            ?.publish()
+            .catch((error) =>
+              logger.error(`Gagal memperbarui leaderboard fan club: ${error.message}`),
+            );
+        }
       },
     });
     listener.start();
@@ -130,6 +162,9 @@ client.once('clientReady', async () => {
         ?.publish(true)
         .catch((error) => logger.error(`Gagal memperbarui leaderboard: ${error.message}`));
       syncAllRoles().catch((error) => logger.error(`Gagal sinkron role: ${error.message}`));
+      fanClubPublisher
+        ?.publish()
+        .catch((error) => logger.error(`Gagal memperbarui leaderboard fan club: ${error.message}`));
     }, intervalMs).unref?.();
 
     await publisher
@@ -152,6 +187,22 @@ client.once('clientReady', async () => {
       600_000,
     ).unref?.();
     logger.info('Sistem tiket verifikasi aktif.');
+
+    // Pasang/segarkan ketiga panel otomatis tiap start -- aman dipanggil
+    // berkali-kali (trackedMessagePublisher cuma edit kalau pesannya sudah
+    // ada, tidak pernah bikin duplikat). Channel yang ID-nya belum diisi di
+    // .env dilewati diam-diam, bukan error.
+    const panelJobs = [
+      [config.tickets.tiktokPanelChannelId, 'tiktokPanelMessageId', TIKTOK_PANEL_TITLE, buildTiktokPanel],
+      [config.tickets.saweriaPanelChannelId, 'saweriaPanelMessageId', SAWERIA_PANEL_TITLE, buildSaweriaPanel],
+      [config.tickets.generalPanelChannelId, 'generalPanelMessageId', GENERAL_PANEL_TITLE, buildGeneralPanel],
+    ];
+    for (const [channelId, metaKey, embedTitle, build] of panelJobs) {
+      if (!channelId) continue;
+      await trackedMessagePublisher({ store, metaKey, embedTitle })
+        .publishOrEdit(client, channelId, () => build())
+        .catch((error) => logger.error(`Gagal memasang panel (${metaKey}): ${error.message}`));
+    }
   }
 
   if (config.saweriaEnabled) {
@@ -182,37 +233,102 @@ client.once('clientReady', async () => {
   }
 });
 
-/** Memberi milestone yang baru tercapai ke semua member terverifikasi. */
+async function announceLevelUp(discordId, text) {
+  if (!config.levelUpChannelId) return;
+  const channel = await client.channels.fetch(config.levelUpChannelId).catch(() => null);
+  if (channel?.isTextBased()) {
+    await channel.send(`🎉 <@${discordId}> ${text}`).catch(() => {});
+  }
+}
+
+/** Memberi milestone gift coin & role Fan Club yang baru tercapai ke semua member terverifikasi. */
 async function syncAllRoles() {
   if (!roles) return;
 
   for (const [discordId, link] of store.allLinks()) {
     const totals = store.totalsForLink(link);
-    if (totals.allTime <= 0) continue;
-
-    const { granted, failed, memberNotFound } = await roles.syncMilestones(
-      discordId,
-      totals.allTime,
-    );
-    if (memberNotFound) {
-      logger.warn(`Member ${discordId} tidak ditemukan saat sinkronisasi role berkala.`);
-    }
-    if (failed.length > 0) {
-      logger.error(
-        `Gagal memberi role ke ${discordId}: ${failed.map((f) => `${f.name} (${f.reason})`).join(', ')}`,
+    if (totals.allTime > 0) {
+      const { granted, failed, memberNotFound } = await roles.syncMilestones(
+        discordId,
+        totals.allTime,
       );
-    }
-    if (granted.length > 0 && config.levelUpChannelId) {
-      const channel = await client.channels.fetch(config.levelUpChannelId).catch(() => null);
-      if (channel?.isTextBased()) {
+      if (memberNotFound) {
+        logger.warn(`Member ${discordId} tidak ditemukan saat sinkronisasi role berkala.`);
+      }
+      if (failed.length > 0) {
+        logger.error(
+          `Gagal memberi role ke ${discordId}: ${failed.map((f) => `${f.name} (${f.reason})`).join(', ')}`,
+        );
+      }
+      if (granted.length > 0) {
         const names = granted.map((m) => `**${m.name}**`).join(', ');
-        await channel.send(`🎉 <@${discordId}> naik tingkat! Role baru: ${names}`).catch(() => {});
+        await announceLevelUp(discordId, `naik tingkat! Role baru: ${names}`);
+      }
+    }
+
+    // Level Fan Club "efektif" -- hasil observasi otomatis kalau sudah ada,
+    // fallback ke klaim manual kalau member itu belum pernah teramati.
+    const effectiveLevel = store.effectiveFanClubLevel(link);
+    if (effectiveLevel != null) {
+      const fanClubResult = await roles.syncFanClubLevel(discordId, effectiveLevel);
+      if (fanClubResult.memberNotFound) {
+        logger.warn(`Member ${discordId} tidak ditemukan saat sinkronisasi role Fan Club berkala.`);
+      }
+      if (fanClubResult.failed) {
+        logger.error(`Gagal memberi role Fan Club ke ${discordId}: ${fanClubResult.failed}`);
+      }
+      if (fanClubResult.granted) {
+        await announceLevelUp(
+          discordId,
+          `naik tingkat Fan Club! Role baru: **${fanClubResult.granted.name}**`,
+        );
       }
     }
   }
 }
 
 client.on('messageCreate', async (message) => {
+  // Pesan webhook Discord dari Saweria -- ditangani terpisah dari jalur
+  // command/tiket biasa, dan harus lolos SEBELUM filter `message.author.bot`
+  // di bawah karena pesan webhook juga dianggap "bot" oleh Discord.
+  if (
+    config.saweria.webhookChannelId &&
+    message.channelId === config.saweria.webhookChannelId &&
+    message.webhookId
+  ) {
+    const parsed = parseSaweriaWebhookMessage(message.content);
+    if (!parsed) return;
+
+    const result = store.recordSaweriaDonation(parsed);
+    if (!result.credited) {
+      logger.info(
+        `Donasi Saweria: Rp${parsed.rupiah} dari "${parsed.donorName}" (belum ditautkan, nunggu klaim lewat >verify s).`,
+      );
+      return;
+    }
+
+    logger.info(
+      `Donasi Saweria: Rp${parsed.rupiah} dari "${parsed.donorName}" -> ${result.deltaCoins > 0 ? '+' : ''}${result.deltaCoins} coin untuk ${result.discordId}.`,
+    );
+
+    if (result.deltaCoins > 0 && roles) {
+      const { granted } = await roles
+        .syncMilestones(result.discordId, result.newTotal)
+        .catch(() => ({ granted: [] }));
+      if (granted.length > 0) {
+        const names = granted.map((m) => `**${m.name}**`).join(', ');
+        await announceLevelUp(result.discordId, `naik tingkat! Role baru: ${names}`);
+      }
+    }
+
+    await publisher
+      ?.publish(listener?.isLive ?? false)
+      .catch((error) =>
+        logger.error(`Gagal memperbarui leaderboard setelah donasi Saweria: ${error.message}`),
+      );
+    return;
+  }
+
   if (message.author.bot || !message.guild) return;
 
   try {

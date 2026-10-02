@@ -1,13 +1,26 @@
 import { EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 
+import { SAWERIA_RUPIAH_PER_COIN } from './giftStore.js';
 import { buildLeaderboardEmbed } from './leaderboard.js';
 import { logger } from './logger.js';
 import { MILESTONES } from './roles.js';
-import { buildPanel, INFO_CHANNEL_ID } from './tickets.js';
+import { trackedMessagePublisher } from './trackedMessage.js';
+import {
+  buildGeneralPanel,
+  buildSaweriaPanel,
+  buildTiktokPanel,
+  GENERAL_PANEL_TITLE,
+  INFO_CHANNEL_ID,
+  SAWERIA_PANEL_TITLE,
+  TIKTOK_PANEL_TITLE,
+} from './tickets.js';
 
 const SAWERIA_URL = 'https://saweria.co/salmennn';
 
 const formatCoins = (value) => new Intl.NumberFormat('id-ID').format(value);
+
+/** Suffix ", akun TikTok @x" buat pesan balasan -- kosong kalau member cuma tertaut lewat Saweria. */
+const tiktokSuffix = (link) => (link.displayId ? `, akun TikTok @${link.displayId}` : '');
 
 export function notVerifiedEmbed() {
   return new EmbedBuilder()
@@ -24,17 +37,24 @@ export function currentMilestone(allTime) {
   return reached.at(-1) ?? null;
 }
 
-export function statsEmbed(user, link, totals) {
+export function statsEmbed(user, link, totals, fanClubLevel) {
   if (!link) return notVerifiedEmbed();
 
   const current = currentMilestone(totals.allTime);
   const next = MILESTONES.find((m) => totals.allTime < m.coins);
 
+  const linkLines = [
+    link.displayId ? `Akun TikTok tertaut: **@${link.displayId}**` : 'Akun TikTok: belum ditautkan',
+  ];
+  if (link.saweriaDonorName) {
+    linkLines.push(`Donatur Saweria tertaut: **${link.saweriaDonorName}**`);
+  }
+
   return new EmbedBuilder()
     .setColor(current?.color ?? 0x5865f2)
     .setTitle(`📊 Stats ${user.username}`)
     .setThumbnail(user.displayAvatarURL({ size: 256 }))
-    .setDescription(`Akun TikTok tertaut: **@${link.displayId}**`)
+    .setDescription(linkLines.join('\n'))
     .addFields(
       {
         name: 'Tingkat saat ini',
@@ -58,13 +78,13 @@ export function statsEmbed(user, link, totals) {
       },
       {
         name: 'Level Fan Club',
-        value: link.fanClubLevel != null ? `Lv.${link.fanClubLevel}` : 'Belum diklaim',
+        value: fanClubLevel != null ? `Lv.${fanClubLevel}` : 'Belum diklaim',
         inline: false,
       },
     );
 }
 
-export function rankEmbed(user, link, totals, rankInfo) {
+export function rankEmbed(user, link, totals, rankInfo, fanClubLevel) {
   if (!link) return notVerifiedEmbed();
 
   const current = currentMilestone(totals.allTime);
@@ -88,7 +108,7 @@ export function rankEmbed(user, link, totals, rankInfo) {
       },
       {
         name: '💜 Level Fan Club',
-        value: link.fanClubLevel != null ? `Lv.${link.fanClubLevel}` : 'Belum diklaim',
+        value: fanClubLevel != null ? `Lv.${fanClubLevel}` : 'Belum diklaim',
         inline: true,
       },
     );
@@ -246,7 +266,8 @@ export function createCommandHandler({
 
       const link = store.linkForDiscordId(target.id);
       const totals = store.totalsForLink(link);
-      await message.reply({ embeds: [statsEmbed(target, link, totals)] });
+      const fanClubLevel = store.effectiveFanClubLevel(link);
+      await message.reply({ embeds: [statsEmbed(target, link, totals, fanClubLevel)] });
       return true;
     }
 
@@ -254,7 +275,10 @@ export function createCommandHandler({
       const link = store.linkForDiscordId(message.author.id);
       const totals = store.totalsForLink(link);
       const rankInfo = store.rankPositionForDiscordId(message.author.id, 'allTime');
-      await message.reply({ embeds: [rankEmbed(message.author, link, totals, rankInfo)] });
+      const fanClubLevel = store.effectiveFanClubLevel(link);
+      await message.reply({
+        embeds: [rankEmbed(message.author, link, totals, rankInfo, fanClubLevel)],
+      });
       return true;
     }
 
@@ -285,13 +309,59 @@ export function createCommandHandler({
       return true;
     }
 
-    if (command === 'setup-verify') {
+    if (command === 'setup-verify' || command === 'setup-ticket') {
       if (!message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
         await message.reply('Perintah ini hanya untuk admin.');
         return true;
       }
-      await message.channel.send(buildPanel());
-      await message.delete().catch(() => {});
+
+      // Panel sebenarnya sudah dipasang/disegarkan otomatis tiap bot start
+      // (lihat index.js) -- command ini cuma buat memicu ulang manual, mis.
+      // kalau pesannya kehapus manual atau embed-nya baru saja diubah.
+      const panels = {
+        tiktok: {
+          channelId: config.tickets.tiktokPanelChannelId,
+          metaKey: 'tiktokPanelMessageId',
+          embedTitle: TIKTOK_PANEL_TITLE,
+          build: buildTiktokPanel,
+        },
+        saweria: {
+          channelId: config.tickets.saweriaPanelChannelId,
+          metaKey: 'saweriaPanelMessageId',
+          embedTitle: SAWERIA_PANEL_TITLE,
+          build: buildSaweriaPanel,
+        },
+        general: {
+          channelId: config.tickets.generalPanelChannelId,
+          metaKey: 'generalPanelMessageId',
+          embedTitle: GENERAL_PANEL_TITLE,
+          build: buildGeneralPanel,
+        },
+      };
+
+      const type =
+        command === 'setup-ticket'
+          ? 'general'
+          : message.content.slice(prefix.length).trim().split(/\s+/)[1]?.toLowerCase();
+      const panel = panels[type];
+      if (!panel) {
+        await message.reply(`Format: \`${prefix}setup-verify <tiktok|saweria>\` atau \`${prefix}setup-ticket\`.`);
+        return true;
+      }
+      if (!panel.channelId) {
+        await message.reply(
+          `Channel buat panel **${type}** belum diisi di konfigurasi (env-nya kosong).`,
+        );
+        return true;
+      }
+
+      const tracker = trackedMessagePublisher({
+        store,
+        metaKey: panel.metaKey,
+        embedTitle: panel.embedTitle,
+      });
+      await tracker.publishOrEdit(message.client, panel.channelId, () => panel.build());
+      await message.reply(`Panel **${type}** sudah dipasang/disegarkan di <#${panel.channelId}>.`);
       return true;
     }
 
@@ -344,7 +414,7 @@ export function createCommandHandler({
       store.removeLink(target.id);
 
       await message.reply(
-        `Verifikasi **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}) sudah dicabut, beserta semua role milestone yang menempel. Datanya perlu klaim ulang dari awal kalau mau diverifikasi lagi.`,
+        `Verifikasi **${target.username}** (<@${target.id}>${tiktokSuffix(link)}) sudah dicabut, beserta semua role milestone yang menempel. Datanya perlu klaim ulang dari awal kalau mau diverifikasi lagi.`,
       );
 
       if (hadFanClubLevel) {
@@ -417,7 +487,7 @@ export function createCommandHandler({
       };
       const { granted, failed, memberNotFound } = syncResult;
 
-      let reply = `+${formatCoins(amount)} coin histori ditambahkan untuk **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}). Total all-time sekarang: ${formatCoins(newTotal)}.`;
+      let reply = `+${formatCoins(amount)} coin histori ditambahkan untuk **${target.username}** (<@${target.id}>${tiktokSuffix(link)}). Total all-time sekarang: ${formatCoins(newTotal)}.`;
       if (granted.length > 0) {
         reply += `\nRole baru: ${granted.map((m) => `**${m.name}**`).join(', ')}`;
       }
@@ -516,7 +586,7 @@ export function createCommandHandler({
         memberNotFound: false,
       };
 
-      let reply = `-${formatCoins(amount)} coin dikurangi dari **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}). Total all-time sekarang: ${formatCoins(newTotal)}.`;
+      let reply = `-${formatCoins(amount)} coin dikurangi dari **${target.username}** (<@${target.id}>${tiktokSuffix(link)}). Total all-time sekarang: ${formatCoins(newTotal)}.`;
       if (syncResult.granted.length > 0) {
         reply += `\nRole disesuaikan jadi: **${syncResult.granted[0].name}**`;
       }
@@ -588,7 +658,7 @@ export function createCommandHandler({
         memberNotFound: false,
       };
 
-      let reply = `Level Fan Club **${target.username}** (<@${target.id}>, akun TikTok @${link.displayId}) diset ke **${level}**.`;
+      let reply = `Level Fan Club **${target.username}** (<@${target.id}>${tiktokSuffix(link)}) diset ke **${level}**.`;
       if (syncResult.granted) {
         reply += `\nRole disesuaikan jadi: **${syncResult.granted.name}**`;
       } else if (level < 5) {
@@ -623,6 +693,202 @@ export function createCommandHandler({
       return true;
     }
 
+    if (command === 'verify') {
+      if (!isModerator(message, config)) {
+        await message.reply('Perintah ini hanya untuk moderator.');
+        return true;
+      }
+
+      if (
+        config.tickets.modNotifyChannelId &&
+        message.channelId !== config.tickets.modNotifyChannelId
+      ) {
+        await message.reply(
+          `Perintah ini cuma bisa dipakai di <#${config.tickets.modNotifyChannelId}>.`,
+        );
+        return true;
+      }
+
+      const args = message.content.slice(prefix.length).trim().split(/\s+/).slice(1);
+      const type = args[0]?.toLowerCase();
+      if (type !== 's' && type !== 't') {
+        await message.reply(
+          `Format: \`${prefix}verify <s|t> <username_discord|@member> <nama>\` (\`t\` = TikTok, \`s\` = Saweria)`,
+        );
+        return true;
+      }
+
+      // args = [tipe, <username_atau_mention>, ...kata-kata nama] -- posisi
+      // ke-2 (index 1) SELALU slot identitas target, terlepas isinya mention
+      // atau username biasa, jadi sisanya (index 2+) aman digabung jadi nama
+      // (boleh multi-kata, mis. nama donatur Saweria).
+      const nama = args.slice(2).join(' ').trim();
+      if (!args[1] || !nama) {
+        await message.reply(
+          `Format: \`${prefix}verify <s|t> <username_discord|@member> <nama>\` (\`t\` = TikTok, \`s\` = Saweria)`,
+        );
+        return true;
+      }
+
+      const resolved = await resolveTarget({
+        guild: message.guild,
+        mentions: message.mentions,
+        query: args[1],
+        prefix,
+        commandName: 'verify',
+      });
+      if (!resolved.target) {
+        await message.reply(resolved.replyText);
+        return true;
+      }
+      const { target } = resolved;
+
+      if (type === 't') {
+        const tiktokUsername = nama.replace(/^@/, '');
+        const taken = store.linkForDisplayId(tiktokUsername);
+        if (taken && taken.discordId !== target.id) {
+          await message.reply(
+            `Username TikTok **@${tiktokUsername}** sudah ditautkan ke <@${taken.discordId}>.`,
+          );
+          return true;
+        }
+
+        store.createLink(target.id, { displayId: tiktokUsername, realName: null });
+        const link = store.linkForDiscordId(target.id);
+        const totals = store.totalsForLink(link);
+        const syncResult = (await roles?.instance?.syncMilestones(target.id, totals.allTime)) ?? {
+          granted: [],
+          failed: [],
+          memberNotFound: false,
+        };
+
+        let reply = `Akun TikTok **@${tiktokUsername}** ditautkan ke **${target.username}** (<@${target.id}>).`;
+        if (syncResult.granted.length > 0) {
+          reply += `\nRole: ${syncResult.granted.map((m) => `**${m.name}**`).join(', ')}`;
+        }
+        if (syncResult.failed.length > 0) {
+          reply += `\n⚠️ Gagal memberi role: ${syncResult.failed.map((f) => `${f.name} (${f.reason})`).join(', ')}`;
+        }
+        await message.reply(reply);
+        await publisher?.instance
+          ?.publish(listener?.isLive ?? false)
+          .catch((error) => logger.error(`Gagal memperbarui leaderboard setelah verify: ${error.message}`));
+        return true;
+      }
+
+      // type === 's' -- tautkan nama donatur Saweria
+      const result = store.linkSaweriaDonor(target.id, nama);
+      if (result.error === 'taken') {
+        await message.reply(`Nama donatur Saweria **${nama}** sudah ditautkan ke member lain.`);
+        return true;
+      }
+
+      let reply = `Nama donatur Saweria **${nama}** ditautkan ke **${target.username}** (<@${target.id}>).`;
+      if (result.credited && result.deltaCoins > 0) {
+        reply += `\n+${formatCoins(result.deltaCoins)} coin dikreditkan dari histori donasi Saweria yang sudah terkumpul (Rp${SAWERIA_RUPIAH_PER_COIN}/coin). Total all-time sekarang: ${formatCoins(result.newTotal)}.`;
+
+        const syncResult = (await roles?.instance?.syncMilestones(target.id, result.newTotal)) ?? {
+          granted: [],
+          failed: [],
+          memberNotFound: false,
+        };
+        if (syncResult.granted.length > 0) {
+          reply += `\nRole: ${syncResult.granted.map((m) => `**${m.name}**`).join(', ')}`;
+        }
+      }
+      await message.reply(reply);
+      await publisher?.instance
+        ?.publish(listener?.isLive ?? false)
+        .catch((error) => logger.error(`Gagal memperbarui leaderboard setelah verify: ${error.message}`));
+      return true;
+    }
+
+    if (command === 'addsaweria' || command === 'reducesaweria') {
+      if (!isModerator(message, config)) {
+        await message.reply('Perintah ini hanya untuk moderator.');
+        return true;
+      }
+
+      if (
+        config.tickets.modNotifyChannelId &&
+        message.channelId !== config.tickets.modNotifyChannelId
+      ) {
+        await message.reply(
+          `Perintah ini cuma bisa dipakai di <#${config.tickets.modNotifyChannelId}>.`,
+        );
+        return true;
+      }
+
+      const isAdd = command === 'addsaweria';
+      const args = message.content.slice(prefix.length).trim().split(/\s+/).slice(1);
+      const amountArg = args.at(-1);
+      const rupiah = Number.parseInt(amountArg, 10);
+      if (!amountArg || !Number.isFinite(rupiah) || rupiah <= 0) {
+        await message.reply(
+          `Format: \`${prefix}${command} <username_discord|@member> <jumlah_rupiah>\``,
+        );
+        return true;
+      }
+
+      const coins = Math.floor(rupiah / SAWERIA_RUPIAH_PER_COIN);
+      if (coins <= 0) {
+        await message.reply(`Jumlah terlalu kecil -- minimal Rp${SAWERIA_RUPIAH_PER_COIN} buat jadi 1 coin.`);
+        return true;
+      }
+
+      const query = args.slice(0, -1).join(' ');
+      const resolved = await resolveTarget({
+        guild: message.guild,
+        mentions: message.mentions,
+        query,
+        prefix,
+        commandName: command,
+      });
+      if (!resolved.target) {
+        await message.reply(resolved.replyText);
+        return true;
+      }
+      const { target } = resolved;
+
+      const link = store.linkForDiscordId(target.id);
+      if (!link) {
+        await message.reply(`**${target.username}** (<@${target.id}>) belum terverifikasi.`);
+        return true;
+      }
+
+      const newTotal = isAdd
+        ? store.addManualCoins(target.id, coins)
+        : store.reduceManualCoins(target.id, coins);
+      if (newTotal === null) {
+        await message.reply(
+          isAdd
+            ? `Gagal menambah coin untuk **${target.username}** (<@${target.id}>).`
+            : `**${target.username}** (<@${target.id}>) belum punya coin tercatat sama sekali, tidak ada yang bisa dikurangi.`,
+        );
+        return true;
+      }
+
+      const syncResult = (await roles?.instance?.syncMilestones(target.id, newTotal)) ?? {
+        granted: [],
+        failed: [],
+        memberNotFound: false,
+      };
+
+      let reply = `${isAdd ? '+' : '-'}${formatCoins(coins)} coin (dari Rp${formatCoins(rupiah)} @ Rp${SAWERIA_RUPIAH_PER_COIN}/coin) untuk **${target.username}** (<@${target.id}>${tiktokSuffix(link)}). Total all-time sekarang: ${formatCoins(newTotal)}.`;
+      if (syncResult.granted.length > 0) {
+        reply += `\nRole: ${syncResult.granted.map((m) => `**${m.name}**`).join(', ')}`;
+      }
+      if (syncResult.failed.length > 0) {
+        reply += `\n⚠️ Gagal menyesuaikan role: ${syncResult.failed.map((f) => f.reason).join(', ')}`;
+      }
+      await message.reply(reply);
+
+      await publisher?.instance
+        ?.publish(listener?.isLive ?? false)
+        .catch((error) => logger.error(`Gagal memperbarui leaderboard setelah ${command}: ${error.message}`));
+      return true;
+    }
+
     if (command === 'help') {
       const lines = [
         `\`${prefix}stats [username|@member]\`: lihat total coin dan tingkat role (kosongkan buat cek diri sendiri)`,
@@ -633,13 +899,19 @@ export function createCommandHandler({
         `\`${prefix}info\`: link channel info komunitas`,
       ];
       if (message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
-        lines.push(`\`${prefix}setup-verify\`: (admin) pasang panel verifikasi di channel ini`);
+        lines.push(
+          `\`${prefix}setup-verify <tiktok|saweria>\`: (admin) pasang ulang panel verifikasi secara manual (otomatis terpasang tiap bot start)`,
+          `\`${prefix}setup-ticket\`: (admin) pasang ulang panel tiket umum secara manual`,
+        );
       }
       if (isModerator(message, config)) {
         lines.push(
+          `\`${prefix}verify <s|t> <username|@member> <nama>\`: (moderator) tautkan akun TikTok (t) atau nama donatur Saweria (s) ke member`,
           `\`${prefix}unverify <username|@member>\`: (moderator) cabut verifikasi dan semua role member`,
           `\`${prefix}addcoin <username|@member> <jumlah>\`: (moderator) tambah coin histori member`,
           `\`${prefix}reducecoin <username|@member> <jumlah>\`: (moderator) kurangi coin member (role tidak ikut dicabut)`,
+          `\`${prefix}addsaweria <username|@member> <rupiah>\`: (moderator) tambah coin dari donasi Saweria manual (otomatis dikonversi Rp${SAWERIA_RUPIAH_PER_COIN}/coin)`,
+          `\`${prefix}reducesaweria <username|@member> <rupiah>\`: (moderator) kurangi coin dari koreksi donasi Saweria`,
           `\`${prefix}setfanclublevel <username|@member> <level>\`: (moderator) set Level Fan Club member`,
         );
       }

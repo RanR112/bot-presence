@@ -14,42 +14,73 @@ function discordError(code, message = 'error') {
   return error;
 }
 
+const BOT_ID = 'bot-123';
+
 /**
  * Mock channel + client minimal. `messages` adalah Map id->payload yang
  * merepresentasikan "pesan yang sungguhan ada" -- fetch untuk id yang tidak
  * ada di situ melempar error 10008 (Unknown Message), persis Discord asli.
+ * Dukung dua mode fetch: fetch(id) (satu pesan) dan fetch({limit}) (bulk,
+ * dipakai mekanisme adopsi) -- sama seperti discord.js asli.
  */
-function mockClientWithChannel({ fetchError = null } = {}) {
+function mockClientWithChannel({ fetchError = null, preExisting = [] } = {}) {
   const messages = new Map();
   let nextId = 1;
   const sendLog = [];
   const editLog = [];
 
+  function makeEntry(id, payload) {
+    return { id, author: { id: BOT_ID }, embeds: payload.embeds ?? [], _payload: payload };
+  }
+
+  for (const payload of preExisting) {
+    const id = String(nextId++);
+    messages.set(id, makeEntry(id, payload));
+  }
+
   const channel = {
     isTextBased: () => true,
     messages: {
-      fetch: async (id) => {
+      fetch: async (arg) => {
+        if (typeof arg === 'object' && arg !== null && 'limit' in arg) {
+          // Mode bulk (dipakai findAdoptableMessage) -- balikan Collection-like
+          // dengan .find(), persis seperti Collection discord.js asli.
+          const all = [...messages.values()]
+            .reverse() // terbaru dulu, meniru urutan Discord asli
+            .slice(0, arg.limit)
+            .map((entry) => ({
+              id: entry.id,
+              author: entry.author,
+              embeds: entry.embeds,
+              edit: async (payload) => {
+                editLog.push({ id: entry.id, payload });
+                messages.set(entry.id, makeEntry(entry.id, payload));
+              },
+            }));
+          return { find: (predicate) => all.find(predicate) };
+        }
+
+        const id = arg;
         if (fetchError) throw fetchError;
         if (!messages.has(id)) throw discordError(10008, 'Unknown Message');
-        const stored = messages.get(id);
         return {
           id,
           edit: async (payload) => {
             editLog.push({ id, payload });
-            messages.set(id, payload);
+            messages.set(id, makeEntry(id, payload));
           },
         };
       },
     },
     send: async (payload) => {
       const id = String(nextId++);
-      messages.set(id, payload);
+      messages.set(id, makeEntry(id, payload));
       sendLog.push({ id, payload });
       return { id };
     },
   };
 
-  const client = { channels: { fetch: async () => channel } };
+  const client = { user: { id: BOT_ID }, channels: { fetch: async () => channel } };
   return { client, messages, sendLog, editLog };
 }
 
@@ -180,5 +211,82 @@ describe('trackedMessagePublisher', () => {
 
     await tracker.publishOrEdit(client, 'chan-tidak-ada', () => ({ content: 'v1' }));
     assert.equal(store.getMeta('msgId'), null);
+  });
+
+  it('BUG YANG DIPERBAIKI (race lintas proses): belum ada messageId tersimpan, TAPI bot sudah pernah kirim pesan serupa di channel -> ADOPSI, bukan kirim duplikat', async () => {
+    const store = await freshStore('i.json');
+    // Simulasikan: proses LAIN sudah kirim pesan ini duluan (messageId belum
+    // sempat tersimpan di proses kita, mis. karena dua instance jalan
+    // bersamaan setelah restart yang gagal mematikan proses lama).
+    const { client, sendLog, editLog } = mockClientWithChannel({
+      preExisting: [{ embeds: [{ title: 'Leaderboard X' }], content: 'versi lama' }],
+    });
+    const tracker = trackedMessagePublisher({
+      store,
+      metaKey: 'msgId',
+      embedTitle: 'Leaderboard X',
+    });
+
+    await tracker.publishOrEdit(client, 'chan-1', () => ({
+      embeds: [{ title: 'Leaderboard X' }],
+      content: 'versi baru',
+    }));
+
+    assert.equal(sendLog.length, 0, 'tidak boleh kirim pesan baru -- harus adopsi yang sudah ada');
+    assert.equal(editLog.length, 1, 'pesan yang sudah ada diedit ke versi baru');
+    assert.equal(
+      store.getMeta('msgId'),
+      '1',
+      'messageId yang diadopsi harus tersimpan untuk siklus berikutnya',
+    );
+  });
+
+  it('messageId basi (10008) TAPI ada pesan lain yang cocok di channel -> adopsi itu, bukan kirim baru', async () => {
+    const store = await freshStore('j.json');
+    const { client, sendLog } = mockClientWithChannel({
+      preExisting: [{ embeds: [{ title: 'Leaderboard Y' }], content: 'yang asli' }],
+    });
+    const tracker = trackedMessagePublisher({
+      store,
+      metaKey: 'msgId',
+      embedTitle: 'Leaderboard Y',
+    });
+
+    store.setMeta('msgId', 'id-basi-yang-tidak-ada');
+    await tracker.publishOrEdit(client, 'chan-1', () => ({ embeds: [{ title: 'Leaderboard Y' }] }));
+
+    assert.equal(sendLog.length, 0);
+    assert.equal(store.getMeta('msgId'), '1');
+  });
+
+  it('adopsi cuma mencocokkan judul embed yang SAMA -- tidak mengadopsi pesan bot lain yang tidak nyambung', async () => {
+    const store = await freshStore('k.json');
+    const { client, sendLog } = mockClientWithChannel({
+      preExisting: [{ embeds: [{ title: 'Papan Lain Sama Sekali' }], content: 'bukan punya kita' }],
+    });
+    const tracker = trackedMessagePublisher({
+      store,
+      metaKey: 'msgId',
+      embedTitle: 'Leaderboard Z',
+    });
+
+    await tracker.publishOrEdit(client, 'chan-1', () => ({ embeds: [{ title: 'Leaderboard Z' }] }));
+
+    assert.equal(
+      sendLog.length,
+      1,
+      'judul tidak cocok -> tetap kirim pesan baru, bukan adopsi yang salah',
+    );
+  });
+
+  it('tanpa embedTitle: adopsi dimatikan, perilaku tetap seperti sebelumnya (kirim baru)', async () => {
+    const store = await freshStore('l.json');
+    const { client, sendLog } = mockClientWithChannel({
+      preExisting: [{ embeds: [{ title: 'Apa Saja' }] }],
+    });
+    const tracker = trackedMessagePublisher({ store, metaKey: 'msgId' }); // embedTitle tidak diisi
+
+    await tracker.publishOrEdit(client, 'chan-1', () => ({ content: 'v1' }));
+    assert.equal(sendLog.length, 1);
   });
 });

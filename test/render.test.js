@@ -17,7 +17,7 @@ import { buildFanClubLeaderboardEmbed } from '../src/fanClubLeaderboard.js';
 import { GiftStore } from '../src/giftStore.js';
 import { buildLeaderboardEmbed } from '../src/leaderboard.js';
 import { MILESTONES } from '../src/roles.js';
-import { buildPanel } from '../src/tickets.js';
+import { buildGeneralPanel, buildSaweriaPanel, buildTiktokPanel } from '../src/tickets.js';
 
 const fakeUser = (overrides = {}) => ({
   username: 'someone',
@@ -93,15 +93,23 @@ describe('buildLeaderboardEmbed', () => {
   });
 });
 
-describe('buildPanel', () => {
-  it('menghasilkan satu embed dan satu tombol yang valid', () => {
-    const panel = buildPanel();
-    assert.equal(panel.embeds.length, 1);
-    assert.equal(panel.components.length, 1);
+describe('panel tiket (tiktok/saweria/general)', () => {
+  it('ketiganya menghasilkan satu embed dan satu tombol yang valid, dengan custom_id masing-masing', () => {
+    const cases = [
+      [buildTiktokPanel, 'verify:tiktok:start'],
+      [buildSaweriaPanel, 'verify:saweria:start'],
+      [buildGeneralPanel, 'ticket:general:start'],
+    ];
 
-    const row = panel.components[0].toJSON();
-    assert.equal(row.components.length, 1);
-    assert.equal(row.components[0].custom_id, 'verify:start');
+    for (const [build, expectedCustomId] of cases) {
+      const panel = build();
+      assert.equal(panel.embeds.length, 1);
+      assert.equal(panel.components.length, 1);
+
+      const row = panel.components[0].toJSON();
+      assert.equal(row.components.length, 1);
+      assert.equal(row.components[0].custom_id, expectedCustomId);
+    }
   });
 });
 
@@ -202,22 +210,12 @@ describe('rankEmbed', () => {
     assert.equal(rankField2.value, 'Belum masuk papan');
   });
 
-  it('field Level Fan Club menampilkan nilai asli kalau sudah diset moderator', () => {
-    const withLevel = rankEmbed(
-      fakeUser(),
-      { displayId: 'x', fanClubLevel: 23 },
-      { allTime: 100 },
-      null,
-    );
+  it('field Level Fan Club menampilkan nilai efektif (observasi atau manual) yang dikirim pemanggil', () => {
+    const withLevel = rankEmbed(fakeUser(), { displayId: 'x' }, { allTime: 100 }, null, 23);
     const field = withLevel.toJSON().fields.find((f) => f.name.includes('Fan Club'));
     assert.equal(field.value, 'Lv.23');
 
-    const withoutLevel = rankEmbed(
-      fakeUser(),
-      { displayId: 'x', fanClubLevel: null },
-      { allTime: 100 },
-      null,
-    );
+    const withoutLevel = rankEmbed(fakeUser(), { displayId: 'x' }, { allTime: 100 }, null, null);
     const field2 = withoutLevel.toJSON().fields.find((f) => f.name.includes('Fan Club'));
     assert.equal(field2.value, 'Belum diklaim');
   });
