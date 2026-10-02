@@ -12,7 +12,7 @@ import { logger } from './src/logger.js';
 import { applyPresence } from './src/presence.js';
 import { RoleManager } from './src/roles.js';
 import { SaweriaLeaderboardPublisher } from './src/saweriaLeaderboard.js';
-import { parseSaweriaWebhookMessage } from './src/saweriaWebhook.js';
+import { extractSaweriaCandidateTexts, parseSaweriaWebhookEvent } from './src/saweriaWebhook.js';
 import {
   buildGeneralPanel,
   buildSaweriaPanel,
@@ -299,10 +299,10 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    const parsed = parseSaweriaWebhookMessage(message.content);
+    const parsed = parseSaweriaWebhookEvent(message);
     if (!parsed) {
       logger.warn(
-        `Pesan webhook Saweria TIDAK cocok format parser, diabaikan. Isi pesan mentah: ${JSON.stringify(message.content)}`,
+        `Pesan webhook Saweria TIDAK cocok format parser di content maupun embed, diabaikan. Kandidat teks: ${JSON.stringify(extractSaweriaCandidateTexts(message))}`,
       );
       return;
     }

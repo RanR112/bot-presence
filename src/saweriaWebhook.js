@@ -22,3 +22,35 @@ export function parseSaweriaWebhookMessage(content) {
 
   return { donorName, rupiah };
 }
+
+/**
+ * Saweria TERNYATA mengirim template-nya lewat EMBED (title/description),
+ * bukan `message.content` -- ketahuan dari `content` yang selalu kosong di
+ * pesan asli, walau terlihat ada teks di Discord (itu teks embed). Daripada
+ * menebak field yang mana persis, kumpulkan semua kandidat teks yang masuk
+ * akal (content + title/description/footer/author tiap embed) supaya tahan
+ * banting kalau Saweria ganti-ganti struktur embed-nya.
+ *
+ * @param {{content?: string, embeds?: Array<{title?: string, description?: string, footer?: {text?: string}, author?: {name?: string}}>}} message
+ * @returns {string[]}
+ */
+export function extractSaweriaCandidateTexts(message) {
+  const texts = [];
+  if (message?.content) texts.push(message.content);
+  for (const embed of message?.embeds ?? []) {
+    if (embed?.title) texts.push(embed.title);
+    if (embed?.description) texts.push(embed.description);
+    if (embed?.footer?.text) texts.push(embed.footer.text);
+    if (embed?.author?.name) texts.push(embed.author.name);
+  }
+  return texts;
+}
+
+/** Coba parse tiap kandidat teks dari pesan webhook, balikan hasil pertama yang cocok. */
+export function parseSaweriaWebhookEvent(message) {
+  for (const text of extractSaweriaCandidateTexts(message)) {
+    const parsed = parseSaweriaWebhookMessage(text);
+    if (parsed) return parsed;
+  }
+  return null;
+}
