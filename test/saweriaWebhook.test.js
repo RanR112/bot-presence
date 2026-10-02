@@ -4,25 +4,30 @@ import { describe, it } from 'node:test';
 import { parseSaweriaWebhookMessage } from '../src/saweriaWebhook.js';
 
 describe('parseSaweriaWebhookMessage', () => {
-  it('parse pesan normal: nama donatur + rupiah dengan pemisah ribuan', () => {
-    const result = parseSaweriaWebhookMessage('Ada donasi masuk dari Someguy sebesar Rp 69.420');
+  it('parse pesan normal: rupiah dengan pemisah ribuan + nama donatur', () => {
+    const result = parseSaweriaWebhookMessage('Yay kamu dapet 69.420 dari Someguy');
     assert.deepEqual(result, { donorName: 'Someguy', rupiah: 69420 });
   });
 
-  it('baris tambahan setelah pesan utama (mis. dari tombol test Saweria) diabaikan', () => {
-    const result = parseSaweriaWebhookMessage(
-      'Ada donasi masuk dari Someguy sebesar Rp 69.420\nTHIS IS A FAKE MESSAGE! HAVE A GOOD ONE',
-    );
-    assert.deepEqual(result, { donorName: 'Someguy', rupiah: 69420 });
+  it('baris tambahan setelah pesan utama (pesan opsional donatur, atau tombol test Saweria) diabaikan', () => {
+    const result = parseSaweriaWebhookMessage('Yay kamu dapet 5.000 dari Rav\np ngetes bot');
+    assert.deepEqual(result, { donorName: 'Rav', rupiah: 5000 });
+  });
+
+  const fakeDisclaimer = parseSaweriaWebhookMessage(
+    'Yay kamu dapet 69.420 dari Someguy\nTHIS IS A FAKE MESSAGE! HAVE A GOOD ONE',
+  );
+  it('disclaimer tombol test Saweria juga diabaikan', () => {
+    assert.deepEqual(fakeDisclaimer, { donorName: 'Someguy', rupiah: 69420 });
   });
 
   it('nama donatur multi-kata ikut terbaca utuh', () => {
-    const result = parseSaweriaWebhookMessage('Ada donasi masuk dari Rav Si Keren sebesar Rp 5.000');
+    const result = parseSaweriaWebhookMessage('Yay kamu dapet 5.000 dari Rav Si Keren');
     assert.deepEqual(result, { donorName: 'Rav Si Keren', rupiah: 5000 });
   });
 
   it('rupiah tanpa pemisah ribuan tetap terbaca', () => {
-    const result = parseSaweriaWebhookMessage('Ada donasi masuk dari X sebesar Rp 500');
+    const result = parseSaweriaWebhookMessage('Yay kamu dapet 500 dari X');
     assert.equal(result.rupiah, 500);
   });
 
@@ -34,6 +39,6 @@ describe('parseSaweriaWebhookMessage', () => {
   });
 
   it('rupiah nol atau negatif ditolak', () => {
-    assert.equal(parseSaweriaWebhookMessage('Ada donasi masuk dari X sebesar Rp 0'), null);
+    assert.equal(parseSaweriaWebhookMessage('Yay kamu dapet 0 dari X'), null);
   });
 });
