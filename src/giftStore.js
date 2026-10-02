@@ -393,14 +393,19 @@ export class GiftStore {
   #creditSaweriaIfLinked(key, { realtime = false } = {}) {
     const data = this.#store.get();
     const donor = data.saweriaDonors[key];
-    if (!donor) return { credited: false };
+    if (!donor) return { credited: false, linked: false };
 
     const link = this.#findLinkBySaweriaName(donor.displayName ?? key);
-    if (!link) return { credited: false };
+    if (!link) return { credited: false, linked: false };
 
     const targetCoins = Math.floor(donor.totalRupiah / SAWERIA_RUPIAH_PER_COIN);
     const deltaCoins = targetCoins - donor.creditedCoins;
-    if (deltaCoins === 0) return { credited: false };
+    if (deltaCoins === 0) {
+      // Sudah ditautkan, tapi rupiah yang terkumpul belum cukup buat nambah 1
+      // coin lagi (mis. donasi Rp150 padahal Rp200 = 1 coin) -- BUKAN berarti
+      // belum ditautkan, cuma belum cukup buat dibulatkan.
+      return { credited: false, linked: true };
+    }
 
     donor.creditedCoins = targetCoins;
     this.#store.scheduleSave();

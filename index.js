@@ -6,7 +6,7 @@ import { createCommandHandler } from './src/commands.js';
 import { loadConfig } from './src/config.js';
 import { FanClubLeaderboardPublisher } from './src/fanClubLeaderboard.js';
 import { GiftListener } from './src/giftListener.js';
-import { GiftStore } from './src/giftStore.js';
+import { GiftStore, SAWERIA_RUPIAH_PER_COIN } from './src/giftStore.js';
 import { LeaderboardPublisher } from './src/leaderboard.js';
 import { logger } from './src/logger.js';
 import { applyPresence } from './src/presence.js';
@@ -291,18 +291,28 @@ client.on('messageCreate', async (message) => {
   // Pesan webhook Discord dari Saweria -- ditangani terpisah dari jalur
   // command/tiket biasa, dan harus lolos SEBELUM filter `message.author.bot`
   // di bawah karena pesan webhook juga dianggap "bot" oleh Discord.
-  if (
-    config.saweria.webhookChannelId &&
-    message.channelId === config.saweria.webhookChannelId &&
-    message.webhookId
-  ) {
+  if (config.saweria.webhookChannelId && message.channelId === config.saweria.webhookChannelId) {
+    if (!message.webhookId) {
+      logger.warn(
+        `Pesan masuk di channel webhook Saweria TAPI bukan dari webhook (author=${message.author?.id}, bot=${message.author?.bot}) -- diabaikan. Kalau ini seharusnya pesan asli dari Saweria, kemungkinan integrasinya tidak lagi memakai Discord webhook.`,
+      );
+      return;
+    }
+
     const parsed = parseSaweriaWebhookMessage(message.content);
-    if (!parsed) return;
+    if (!parsed) {
+      logger.warn(
+        `Pesan webhook Saweria TIDAK cocok format parser, diabaikan. Isi pesan mentah: ${JSON.stringify(message.content)}`,
+      );
+      return;
+    }
 
     const result = store.recordSaweriaDonation(parsed);
     if (!result.credited) {
       logger.info(
-        `Donasi Saweria: Rp${parsed.rupiah} dari "${parsed.donorName}" (belum ditautkan, nunggu klaim lewat >verify s).`,
+        result.linked
+          ? `Donasi Saweria: Rp${parsed.rupiah} dari "${parsed.donorName}" tercatat, tapi belum cukup buat 1 coin lagi (perlu kelipatan Rp${SAWERIA_RUPIAH_PER_COIN}) -- bakal kekredit begitu totalnya cukup.`
+          : `Donasi Saweria: Rp${parsed.rupiah} dari "${parsed.donorName}" (belum ditautkan ke member mana pun, nunggu klaim lewat >verify s / tiket Saweria).`,
       );
       return;
     }
